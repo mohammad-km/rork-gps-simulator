@@ -1,0 +1,578 @@
+package com.rork.gpssimulator.ui.screens
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Layers
+import androidx.compose.material.icons.filled.MyLocation
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.rork.gpssimulator.data.model.LatLng
+import com.rork.gpssimulator.data.model.MapType
+import com.rork.gpssimulator.data.model.MockState
+import com.rork.gpssimulator.data.model.SavedKind
+import com.rork.gpssimulator.data.model.SessionKind
+import com.rork.gpssimulator.i18n.K
+import com.rork.gpssimulator.i18n.LocalStrings
+import com.rork.gpssimulator.ui.AppViewModel
+import com.rork.gpssimulator.ui.components.Crosshair
+import com.rork.gpssimulator.ui.components.JoystickControl
+import com.rork.gpssimulator.ui.components.SelectionOption
+import com.rork.gpssimulator.ui.components.SelectionSheet
+import com.rork.gpssimulator.ui.components.StatusDot
+import com.rork.gpssimulator.ui.map.MapMarker
+import com.rork.gpssimulator.ui.map.MapPolyline
+import com.rork.gpssimulator.ui.map.MapView
+import com.rork.gpssimulator.ui.map.rememberMapCameraState
+import com.rork.gpssimulator.ui.theme.LocalAppColors
+import com.rork.gpssimulator.ui.theme.MonoValueStyle
+import com.rork.gpssimulator.util.Format
+import androidx.compose.runtime.collectAsState
+import kotlinx.coroutines.launch
+
+@Composable
+fun MapScreen(
+    viewModel: AppViewModel,
+    bottomInset: androidx.compose.ui.unit.Dp,
+    onOpenSearch: () -> Unit,
+    onOpenFavorites: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val strings = LocalStrings.current
+    val appColors = LocalAppColors.current
+    val scope = rememberCoroutineScope()
+
+    val settings by viewModel.settings.collectAsState()
+    val mockState by viewModel.mockState.collectAsState()
+    val selected by viewModel.selected.collectAsState()
+    val activePoint by viewModel.activePoint.collectAsState()
+    val realSample by viewModel.realSample.collectAsState()
+    val elapsedMs by viewModel.elapsedMs.collectAsState()
+    val isPaused by viewModel.isPaused.collectAsState()
+    val sessionKind by viewModel.sessionKind.collectAsState()
+    val routeProgress by viewModel.routeProgress.collectAsState()
+    val currentSpeed by viewModel.currentSpeedKmh.collectAsState()
+    val cameraTarget by viewModel.cameraTarget.collectAsState()
+
+    val camera = rememberMapCameraState(
+        initialCenter = LatLng(settings.lastCameraLat, settings.lastCameraLng),
+        initialZoom = if (settings.rememberLastPosition) settings.lastCameraZoom else settings.defaultZoom,
+    )
+
+    var showLayerSheet by remember { mutableStateOf(false) }
+    var showPreview by remember { mutableStateOf(false) }
+
+    val isMockActive = mockState == MockState.MOCK_ACTIVE
+
+    // Pulse animation shared by the active marker.
+    val transition = rememberInfiniteTransition(label = "pulse")
+    val pulse by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(tween(1600), RepeatMode.Restart),
+        label = "pulseFraction",
+    )
+
+    // Camera moves requested by the view model (search result, my location, stop…).
+    LaunchedEffect(cameraTarget) {
+        val target = cameraTarget ?: return@LaunchedEffect
+        camera.animateTo(
+            point = target.first,
+            newZoom = target.second ?: camera.zoom,
+            animate = settings.animateMap,
+        )
+        viewModel.consumeCameraTarget()
+    }
+
+    // Keep the map centred on the moving mock position during route/joystick runs.
+    LaunchedEffect(activePoint, sessionKind) {
+        val point = activePoint ?: return@LaunchedEffect
+        if (sessionKind == SessionKind.ROUTE || sessionKind == SessionKind.JOYSTICK) {
+            camera.snapTo(point)
+        }
+    }
+
+    // Open the preview sheet whenever a fresh candidate appears — including while
+    // a session is running, where it offers "Move Here" instead of "Start".
+    LaunchedEffect(selected?.point) {
+        if (selected != null) showPreview = true
+    }
+
+    val markers = buildList {
+        activePoint?.let { point ->
+            add(
+                MapMarker(
+                    point = point,
+                    color = MaterialTheme.colorScheme.primary,
+                    pulsing = !isPaused,
+                    radiusMeters = settings.accuracyM.toDouble(),
+                ),
+            )
+        }
+        if (!isMockActive) {
+            realSample?.let { sample ->
+                add(
+                    MapMarker(
+                        point = sample.point,
+                        color = appColors.success,
+                        radiusMeters = sample.accuracy.toDouble(),
+                    ),
+                )
+            }
+        }
+        // The pending candidate, in either state.
+        selected?.let { add(MapMarker(point = it.point, color = MaterialTheme.colorScheme.primary)) }
+    }
+
+    val polylines = routeProgress?.let { progress ->
+        listOf(MapPolyline(progress.route.points, MaterialTheme.colorScheme.primary))
+    } ?: emptyList()
+
+    Box(modifier = modifier.fillMaxSize()) {
+        MapView(
+            camera = camera,
+            mapType = settings.mapType,
+            markers = markers,
+            polylines = polylines,
+            pulseFraction = pulse,
+            onCameraIdle = { center, zoom -> viewModel.persistCamera(center, zoom) },
+            modifier = Modifier.fillMaxSize(),
+        )
+
+        // Fixed targeting reticle. It stays put even during an active session,
+        // where it aims the next candidate without touching the live coordinate.
+        Crosshair(
+            color = MaterialTheme.colorScheme.primary,
+            isActive = camera.isUserInteracting,
+            modifier = Modifier.align(Alignment.Center),
+        )
+
+        // ---- Top chrome ----
+        Column(
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .statusBarsPadding()
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+        ) {
+            if (isMockActive) {
+                MockActiveBanner(
+                    lat = activePoint?.lat ?: 0.0,
+                    lng = activePoint?.lng ?: 0.0,
+                    accuracy = settings.accuracyM,
+                    altitude = settings.altitudeM,
+                    speedKmh = currentSpeed,
+                    elapsedMs = elapsedMs,
+                    isPaused = isPaused,
+                    units = settings.units,
+                )
+            } else {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    StatusPill(
+                        text = if (mockState == MockState.SELECTED) {
+                            strings[K.location_selected]
+                        } else {
+                            strings[K.real_gps]
+                        },
+                        dotColor = if (mockState == MockState.SELECTED) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            appColors.success
+                        },
+                    )
+                    CoordinatePill(
+                        lat = camera.centerLat,
+                        lng = camera.centerLng,
+                        latLabel = strings[K.lat],
+                        lngLabel = strings[K.lng],
+                        modifier = Modifier.weight(1f, fill = false),
+                    )
+                }
+            }
+        }
+
+        // ---- Floating side controls ----
+        Column(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .padding(end = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            MapControlButton(Icons.Default.Search, strings[K.search_places], onOpenSearch)
+            MapControlButton(Icons.Default.MyLocation, strings[K.my_location]) {
+                viewModel.returnToRealLocation()
+            }
+            MapControlButton(Icons.Default.Layers, strings[K.map_layers]) { showLayerSheet = true }
+            MapControlButton(Icons.Default.Star, strings[K.favorites], onOpenFavorites)
+        }
+
+        // ---- Joystick ----
+        if (settings.joystickEnabled && mockState == MockState.MOCK_ACTIVE) {
+            JoystickControl(
+                speedLabel = Format.speed(currentSpeed, settings.units),
+                isPaused = isPaused,
+                onVector = { x, y -> viewModel.setJoystickVector(x, y) },
+                onTogglePause = { viewModel.togglePause() },
+                onClose = {
+                    viewModel.setJoystickVector(0f, 0f)
+                    viewModel.updateSettings { it.copy(joystickEnabled = false) }
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    // Clears the taller Select-This-Point + red X control stack.
+                    .padding(start = 14.dp, bottom = bottomInset + 200.dp),
+            )
+        }
+
+        // ---- Bottom action ----
+        Box(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = bottomInset + 18.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (isMockActive) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    // Aim a new candidate without interrupting the running session.
+                    SelectPointButton(
+                        label = strings[K.select_this_point],
+                        lat = camera.centerLat,
+                        lng = camera.centerLng,
+                        onClick = { viewModel.selectPoint(camera.center) },
+                    )
+                    Spacer(Modifier.height(16.dp))
+                    ActiveControls(
+                        showPause = sessionKind != SessionKind.STATIC || settings.joystickEnabled,
+                        isPaused = isPaused,
+                        pauseLabel = if (isPaused) strings[K.resume] else strings[K.pause],
+                        stopLabel = strings[K.stop],
+                        onPause = { viewModel.togglePause() },
+                        onStop = { viewModel.stopMock() },
+                    )
+                }
+            } else {
+                Button(
+                    onClick = { viewModel.selectPoint(camera.center) },
+                    modifier = Modifier.fillMaxWidth().height(58.dp),
+                    shape = RoundedCornerShape(50),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = MaterialTheme.colorScheme.primary,
+                    ),
+                ) {
+                    Icon(Icons.Default.MyLocation, contentDescription = null, modifier = Modifier.size(22.dp))
+                    Spacer(Modifier.width(10.dp))
+                    Text(
+                        text = strings[K.set_mock_location],
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+            }
+        }
+    }
+
+    if (showLayerSheet) {
+        SelectionSheet(
+            title = strings[K.map_type],
+            options = listOf(
+                SelectionOption(MapType.STANDARD, strings[K.standard]),
+                SelectionOption(MapType.SATELLITE, strings[K.satellite]),
+                SelectionOption(MapType.TERRAIN, strings[K.terrain]),
+            ),
+            selected = settings.mapType,
+            onSelect = { type -> viewModel.updateSettings { it.copy(mapType = type) } },
+            onDismiss = { showLayerSheet = false },
+        )
+    }
+
+    val selection = selected
+    if (showPreview && selection != null) {
+        LocationPreviewSheet(
+            selection = selection,
+            units = settings.units,
+            mapType = settings.mapType,
+            isMockActive = isMockActive,
+            // Dismissing cancels the candidate only; a running session survives.
+            onDismiss = {
+                showPreview = false
+                viewModel.clearSelection()
+            },
+            onSaveFavorite = {
+                viewModel.saveCurrentSelectionAsFavorite()
+                viewModel.postMessage(strings[K.saved])
+            },
+            onCopied = { viewModel.postMessage(strings[K.copied]) },
+            // One explicit action — no second confirmation dialog.
+            onPrimary = {
+                showPreview = false
+                if (isMockActive) {
+                    viewModel.moveMockTo(selection.point)
+                } else {
+                    viewModel.startMock()
+                }
+            },
+        )
+    }
+}
+
+/**
+ * Compact secondary action offered while a session runs, so the user can pin a
+ * new candidate without the red X ever leaving the screen.
+ */
+@Composable
+private fun SelectPointButton(
+    label: String,
+    lat: Double,
+    lng: Double,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .shadow(10.dp, RoundedCornerShape(50))
+            .clickable(role = Role.Button, onClick = onClick),
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                Icons.Default.Add,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(9.dp))
+            Column {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelLarge,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                )
+                Text(
+                    text = "${Format.coord(lat)}, ${Format.coord(lng)}",
+                    style = MonoValueStyle.copy(fontSize = 13.sp),
+                    color = LocalAppColors.current.muted,
+                    maxLines = 1,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusPill(text: String, dotColor: Color, modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.shadow(6.dp, RoundedCornerShape(50)),
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            StatusDot(dotColor, size = 10)
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CoordinatePill(
+    lat: Double,
+    lng: Double,
+    latLabel: String,
+    lngLabel: String,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.shadow(6.dp, RoundedCornerShape(18.dp)),
+        shape = RoundedCornerShape(18.dp),
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp)) {
+            CoordinateLine(latLabel, Format.coord(lat))
+            Spacer(Modifier.height(2.dp))
+            CoordinateLine(lngLabel, Format.coord(lng))
+        }
+    }
+}
+
+@Composable
+private fun CoordinateLine(label: String, value: String) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = LocalAppColors.current.muted,
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = value,
+            style = MonoValueStyle.copy(fontSize = 15.sp),
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+@Composable
+private fun MapControlButton(
+    icon: ImageVector,
+    contentDescription: String,
+    onClick: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier
+            .size(50.dp)
+            .shadow(8.dp, CircleShape)
+            .clickable(role = Role.Button, onClick = onClick),
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Box(contentAlignment = Alignment.Center) {
+            Icon(
+                imageVector = icon,
+                contentDescription = contentDescription,
+                tint = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier.size(23.dp),
+            )
+        }
+    }
+}
+
+@Composable
+private fun ActiveControls(
+    showPause: Boolean,
+    isPaused: Boolean,
+    pauseLabel: String,
+    stopLabel: String,
+    onPause: () -> Unit,
+    onStop: () -> Unit,
+) {
+    val appColors = LocalAppColors.current
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(28.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (showPause) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Surface(
+                    modifier = Modifier
+                        .size(66.dp)
+                        .shadow(10.dp, CircleShape)
+                        .clickable(role = Role.Button, onClick = onPause),
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.surface,
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
+                            contentDescription = pauseLabel,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(28.dp),
+                        )
+                    }
+                }
+                Spacer(Modifier.height(7.dp))
+                Text(
+                    text = pauseLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+            }
+        }
+
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Surface(
+                modifier = Modifier
+                    .size(82.dp)
+                    .shadow(14.dp, CircleShape)
+                    .clickable(role = Role.Button, onClick = onStop),
+                shape = CircleShape,
+                color = appColors.danger,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Default.Close,
+                        contentDescription = stopLabel,
+                        tint = Color.White,
+                        modifier = Modifier.size(36.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.height(7.dp))
+            Text(
+                text = stopLabel,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+    }
+}

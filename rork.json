@@ -1,0 +1,10 @@
+{
+  "apps": [
+    {
+      "name": "GPS Simulator",
+      "path": "android-gps-simulator",
+      "framework": "kotlin"
+    }
+  ],
+  "$schema": "https://rork.com/schema/rork.json"
+}
