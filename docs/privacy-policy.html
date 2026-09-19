@@ -9,51 +9,98 @@
   h1 { font-size: 1.8em; }
   h2 { font-size: 1.25em; margin-top: 2em; }
   .updated { color: #666; font-size: 0.9em; }
+  .app-info { background: #f4f6f8; border-radius: 6px; padding: 0.7em 1em; }
   footer { margin-top: 3em; color: #666; font-size: 0.9em; border-top: 1px solid #ddd; padding-top: 1em; }
 </style>
 </head>
 <body>
 <h1>Privacy Policy — GPS Simulator</h1>
-<p class="updated">Last updated: September 19, 2026</p>
+<p class="updated">Last updated: September 20, 2026</p>
 
-<p>GPS Simulator ("the App") is a developer testing tool that lets a user
-supply a mock (simulated) location to Android's location system, for
-software testing and development purposes. This policy explains what
-data the App accesses, what it sends over the network, and what it
-never does.</p>
+<p class="app-info"><strong>App name:</strong> GPS Simulator<br>
+<strong>Developer:</strong> Karam Mobile<br>
+<strong>Package name:</strong> com.rork.gpssimulator</p>
+
+<p>This is the privacy policy for the Android app GPS Simulator ("the
+App"), published by Karam Mobile ("the developer"). The App is a
+developer testing tool that lets a user supply a mock (simulated)
+location to Android's location system, for software testing and
+development purposes. This policy explains what data the App accesses,
+what it sends over the network, what it stores on your device, and what
+it never does.</p>
+
+<h2>Summary</h2>
+<ul>
+  <li>The developer runs no server and receives none of your data. The
+  App has no accounts, no analytics, no advertising, no tracking, and no
+  cookies.</li>
+  <li>The App reads your real location (only with your permission, and
+  without background location access) to show it on the map, and it
+  feeds the location you choose to Android's mock location provider so
+  other apps on your device can see it.</li>
+  <li>The App connects directly from your device to third-party map tile
+  providers and to the OpenStreetMap Nominatim service. They receive the
+  visible map area, place-search text or selected coordinates, and your
+  IP address.</li>
+  <li>Settings, saved places, routes, history, and the last position
+  stay on your device. If Android device backup is turned on, Android
+  may copy them to your Google account backup.</li>
+</ul>
 
 <h2>No Account, No Server of Ours</h2>
-<p>The App has no user accounts, and the developer does not operate any
-backend server. The App does not collect, sell, or share personal data
-with the developer, and contains no analytics or advertising SDKs of
-any kind.</p>
+<p>The App has no user accounts, and Karam Mobile does not operate any
+backend server. The developer does not receive or collect any of your
+personal data, your location, or the data stored in the App, and does
+not sell it. The App contains no analytics, advertising,
+crash-reporting, or tracking SDKs, does not use cookies or advertising
+identifiers, and does not read device identifiers such as your Android
+ID or IMEI. The only network connections the App makes go directly from
+your device to the third-party services described in "Map Tiles and
+Place Search" below. The App uses only open-source libraries (such as
+AndroidX, Kotlin, Ktor, and Koin), none of which is an analytics,
+advertising, or crash-reporting library.</p>
 
 <h2>Location Access</h2>
 <p>The App requests foreground location permission (ACCESS_FINE_LOCATION /
 ACCESS_COARSE_LOCATION) to show your real current position on the in-app
 map, so you can pick a point to simulate or compare it against your
-simulated position. The App does not request background location
-permission, but the real-location listener may keep running while the
-app's process is alive and its screen is bound (for example while the
-app is open, even if temporarily not on screen), not only at the exact
-moment the screen is visible. It stops when the app's screen component
-is destroyed.</p>
+simulated position, and to show live values in its GPS Diagnostics
+screen. The real position is read through Android's location providers:
+GPS, network, or, if "Use Google Play Location Services" is enabled
+(which it is by default), the fused provider that Google Play services
+supplies on your device. The App does not include any Google Play
+services SDK.</p>
+<p>The App does not request background location permission, but the
+real-location listener may keep running while the app's process is alive
+and its screen is bound (for example while the app is open, even if
+temporarily not on screen), not only at the exact moment the screen is
+visible. It stops when the app's screen component is destroyed. Your
+real position itself is kept in memory only, and the App does not send
+it to the developer or to any server of its own. It can indirectly reach
+the map tile providers described below if you center the map on it.</p>
 
 <h2>Map Tiles and Place Search (Third-Party Servers)</h2>
 <p>To display the map, the App downloads map tiles from third-party map
-providers depending on the map style you choose: OpenStreetMap, Esri
+providers depending on the map type you choose: OpenStreetMap, Esri
 World Imagery, OpenTopoMap, or OpenStreetMap France (Humanitarian
-tiles). Loading a map tile sends the visible map area and your IP
-address to that provider's servers, the same way any map app or web
-page with an embedded map would.</p>
+tiles). Loading a map tile sends the tile coordinates of the visible map
+area (which can include your real location if you center the map on it)
+and your IP address to that provider's servers, the same way any map app
+or web page with an embedded map would. Each request also carries a
+User-Agent that identifies the App ("GPSSimulator/1.0 (Android developer
+testing tool)"); the App sends no account identifiers, device
+identifiers, or cookies. All of these connections use HTTPS. Map tiles
+are kept in memory while the App runs and are not saved to your device's
+storage.</p>
 <p>If you use the in-app place search, or select a point (on the map,
 from a search result, or by entering coordinates), the App sends the
 text you type in the search box (as you type) or the coordinates of the
-selected point to the OpenStreetMap Nominatim geocoding service, in
-order to return a place name or address. This happens when you search,
-select a point, or when the App restores your last simulated point at
-startup (if "Restore Last Test Location" is enabled, which it is by
-default) — not continuously and not in the background.</p>
+selected point to the OpenStreetMap Nominatim geocoding service, which
+is operated by the OpenStreetMap Foundation, in order to return a place
+name or address. These requests carry the same User-Agent. This happens
+when you search, select a point, or when the App restores your last
+simulated point at startup (if "Restore Last Test Location" is enabled,
+which it is by default) — not continuously and not in the background.</p>
 <p>These providers are independent third parties with their own privacy
 practices; the App does not control what they log. No account
 identifiers, contact information, or other personal data beyond what
@@ -62,15 +109,22 @@ this section describes is sent to them.</p>
 <h2>Mock Location Data</h2>
 <p>Coordinates you choose to simulate are used to feed Android's mock
 location provider (via Developer Options → "Select mock location app")
-on your own device. This is used only to let other apps on your device
-see the simulated location while you test them. This data stays on your
-device for the mock-location purpose described above and is never sent
-to the developer. The only time the App itself sends a chosen
-coordinate over the network is the place-name lookup described in the
-"Map Tiles and Place Search" section above, when applicable. If you
-choose to share, copy, or export a location or route, it goes to the
-app, clipboard, or file you pick; the App does not send it anywhere on
-its own.</p>
+on your own device. The App supplies them to the device's GPS and
+network location providers and, on Android 12 and later, to the fused
+provider, so other apps on your device that request location see the
+simulated location while you test them. While a simulated session is
+running, the App keeps supplying it from a foreground service that shows
+a persistent notification (which displays the simulated coordinates)
+until you stop the session. What other apps do with the simulated
+location is governed by their own privacy policies, not by this
+one.</p>
+<p>This data stays on your device for the mock-location purpose described
+above and is never sent to the developer. The only time the App itself
+sends a chosen coordinate over the network is the place-name lookup
+described in the "Map Tiles and Place Search" section above, when
+applicable. If you choose to share, copy, or export a location or
+route, it goes to the app, clipboard, or file you pick; the App does not
+send it anywhere on its own.</p>
 
 <h2>Local Storage on Your Device</h2>
 <p>The App stores the following locally on your device only — never
@@ -104,19 +158,37 @@ everything with "Delete All Local App Data".</p>
 stored regardless of these switches (including "Restore Last Test
 Location", which only controls whether the point is selected again when
 you reopen the App); "Delete All Local App Data" removes them.</p>
+<p>Android backup: the App allows Android's standard app-data backup. If
+device backup is turned on (for example, backup to your Google account),
+Android may include this local data in your backup and restore it when
+you set up a new device. That backup is created and controlled by
+Android and Google under your account settings; Karam Mobile cannot
+access it. You can turn backup off in your device's system settings.</p>
 
 <h2>Permissions Summary</h2>
 <ul>
-  <li><strong>Location (foreground only):</strong> to show your real
-  position on the map, as described above.</li>
-  <li><strong>Internet:</strong> to download map tiles and to perform
-  the place lookups, both described above.</li>
-  <li><strong>Notifications / Foreground service:</strong> to show the
-  required "Mock location active" notification while a simulated
-  session is running, and to let you stop it from the notification.</li>
+  <li><strong>Location (ACCESS_FINE_LOCATION, ACCESS_COARSE_LOCATION;
+  foreground only):</strong> to show your real position on the map and
+  in GPS Diagnostics, as described above.</li>
+  <li><strong>Mock location (ACCESS_MOCK_LOCATION):</strong> declared so
+  that the App can be chosen under Developer Options → "Select mock
+  location app". Android lets the App supply mock locations only after
+  you choose it there.</li>
+  <li><strong>Internet and network state (INTERNET,
+  ACCESS_NETWORK_STATE):</strong> to download map tiles, to perform the
+  place lookups described above, and to check whether a network is
+  available (shown in GPS Diagnostics).</li>
+  <li><strong>Foreground service and notifications (FOREGROUND_SERVICE,
+  FOREGROUND_SERVICE_LOCATION, POST_NOTIFICATIONS):</strong> to keep a
+  simulated session running with the required "Mock location active"
+  notification, which shows the simulated coordinates, and to let you
+  stop the session from the notification.</li>
 </ul>
 <p>The App does not request background location, contacts, camera,
-microphone, SMS, or storage permissions.</p>
+microphone, SMS, or storage permissions. If you use Export or Import,
+the App reads or writes only the file you choose in Android's file
+picker. You can withdraw any permission at any time in your device's
+system settings.</p>
 
 <h2>Children's Privacy</h2>
 <p>The App is a developer tool and is not directed at children. It does
@@ -127,9 +199,11 @@ not knowingly collect data from anyone, including children.</p>
 same address with a new "Last updated" date.</p>
 
 <h2>Contact</h2>
-<p>Questions about this policy or the App can be sent to:
-<strong>mhmd88mmk88@gmail.com</strong></p>
+<p>Questions about this policy or the App can be sent to Karam Mobile:
+<strong>mhmd88mmk88@gmail.com</strong>. If you contact the developer by
+email, the developer receives your email address and message and uses
+them only to reply.</p>
 
-<footer>GPS Simulator — a developer tool for testing location-aware apps.</footer>
+<footer>GPS Simulator by Karam Mobile — a developer tool for testing location-aware apps.</footer>
 </body>
 </html>
