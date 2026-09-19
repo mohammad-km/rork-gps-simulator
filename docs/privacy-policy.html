@@ -46,12 +46,14 @@ World Imagery, OpenTopoMap, or OpenStreetMap France (Humanitarian
 tiles). Loading a map tile sends the visible map area and your IP
 address to that provider's servers, the same way any map app or web
 page with an embedded map would.</p>
-<p>If you use the in-app place search, or reverse-geocode a point you
-tap on the map, the App sends the text you typed or the coordinates you
-selected to the OpenStreetMap Nominatim geocoding service, in order to
-return a place name or address. This is only sent when you actively
-search or tap to look up a place — not continuously and not in the
-background.</p>
+<p>If you use the in-app place search, or select a point (on the map,
+from a search result, or by entering coordinates), the App sends the
+text you type in the search box (as you type) or the coordinates of the
+selected point to the OpenStreetMap Nominatim geocoding service, in
+order to return a place name or address. This happens when you search,
+select a point, or when the App restores your last simulated point at
+startup (if "Restore Last Test Location" is enabled, which it is by
+default) — not continuously and not in the background.</p>
 <p>These providers are independent third parties with their own privacy
 practices; the App does not control what they log. No account
 identifiers, contact information, or other personal data beyond what
@@ -61,31 +63,54 @@ this section describes is sent to them.</p>
 <p>Coordinates you choose to simulate are used to feed Android's mock
 location provider (via Developer Options → "Select mock location app")
 on your own device. This is used only to let other apps on your device
-see the simulated location while you test them. It is never uploaded or
-shared with the developer or any third party.</p>
+see the simulated location while you test them. This data stays on your
+device for the mock-location purpose described above and is never sent
+to the developer. The only time the App itself sends a chosen
+coordinate over the network is the place-name lookup described in the
+"Map Tiles and Place Search" section above, when applicable. If you
+choose to share, copy, or export a location or route, it goes to the
+app, clipboard, or file you pick; the App does not send it anywhere on
+its own.</p>
 
 <h2>Local Storage on Your Device</h2>
 <p>The App stores the following locally on your device only — never
 transmitted to the developer:</p>
 <ul>
   <li>App settings and preferences (map style, units, etc.)</li>
-  <li>If "Remember last position" is enabled (on by default), the last
-  map centre shown — which may be your real location if you last viewed
-  the map there</li>
-  <li>Your search history, favourites, and saved routes</li>
+  <li>If "Remember Last Map Position" is enabled (on by default), the
+  last map centre shown — which may be your real location if you last
+  viewed the map there</li>
+  <li>The last point you simulated. It is saved whenever a simulated
+  session runs, and if "Restore Last Test Location" is enabled (on by
+  default) it is selected again when you reopen the App</li>
+  <li>The most recent simulated session's state, including its
+  coordinates and place name, so a running session can resume if Android
+  restarts the App's service. After you stop a session it is marked
+  inactive but stays stored until your next session or until you delete
+  the App's data</li>
+  <li>If "Save Location History" is enabled (on by default), a history
+  of your simulated sessions (place name, address, coordinates, start
+  time, and duration)</li>
+  <li>Your recent searches (the last 10 search queries you entered)</li>
+  <li>Your favourites and presets, your saved routes, and the
+  geofences you create</li>
 </ul>
 <p>This data never leaves your device via any developer-operated
 service, and is deleted when you uninstall the App or clear its data.
-You can disable "Remember last position" in Settings if you do not want
-your last-viewed map position stored.</p>
+In Settings you can turn off "Remember Last Map Position" and "Save
+Location History", clear the history with "Clear History", or remove
+everything with "Delete All Local App Data".</p>
+<p>The last simulated point and the most recent session's state are
+stored regardless of these switches (including "Restore Last Test
+Location", which only controls whether the point is selected again when
+you reopen the App); "Delete All Local App Data" removes them.</p>
 
 <h2>Permissions Summary</h2>
 <ul>
   <li><strong>Location (foreground only):</strong> to show your real
   position on the map, as described above.</li>
-  <li><strong>Internet:</strong> to download map tiles and, when you
-  search or tap a point, to perform place lookups, both described
-  above.</li>
+  <li><strong>Internet:</strong> to download map tiles and to perform
+  the place lookups, both described above.</li>
   <li><strong>Notifications / Foreground service:</strong> to show the
   required "Mock location active" notification while a simulated
   session is running, and to let you stop it from the notification.</li>
