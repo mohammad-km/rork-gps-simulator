@@ -893,8 +893,8 @@ fun SettingsScreen(
                         SettingRow(
                             icon = Icons.Default.Policy,
                             title = strings[K.privacy_policy],
-                            value = strings[K.not_configured],
-                            enabled = false,
+                            onClick = { openPrivacyPolicy(context) },
+                            showChevron = true,
                         )
                         RowDivider()
                     }
@@ -1185,5 +1185,15 @@ private fun openAppSettings(context: android.content.Context) {
         context.startActivity(intent)
     } catch (e: ActivityNotFoundException) {
         // No settings activity available on this device.
+    }
+}
+
+private const val PRIVACY_POLICY_URL = "https://mohammad-km.github.io/rork-gps-simulator/privacy-policy.html"
+
+private fun openPrivacyPolicy(context: android.content.Context) {
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(PRIVACY_POLICY_URL)))
+    } catch (e: ActivityNotFoundException) {
+        // No browser available on this device.
     }
 }
