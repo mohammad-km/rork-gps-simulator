@@ -23,7 +23,7 @@ data class AppSettings(
     val defaultZoom: Float = 14f,
 
     // Mock location behavior
-    val stopOnAppClose: Boolean = true,
+    val stopOnAppClose: Boolean = false,
     val restoreLastLocation: Boolean = true,
     val startConfirmation: Boolean = true,
     val usePlayServices: Boolean = true,
