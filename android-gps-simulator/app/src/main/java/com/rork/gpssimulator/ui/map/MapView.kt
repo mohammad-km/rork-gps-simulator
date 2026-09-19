@@ -27,6 +27,8 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventPass
@@ -327,6 +329,23 @@ private fun projectorFor(camera: MapCameraState, displayDensity: Float): MapProj
 internal fun effectiveZoom(zoom: Float, displayDensity: Float): Double =
     zoom + ln(displayDensity.coerceAtLeast(1f).toDouble()) / ln(2.0)
 
+/**
+ * Subtle, neutral lift for the default OpenStreetMap palette: equal gain on all three channels
+ * plus a small brightness offset (the fifth column is on the 0–255 scale), so the map gets
+ * lighter without any channel being favored. Applied to [TileSource.STANDARD] tiles only; every
+ * other source is drawn unfiltered.
+ */
+private val standardTileColorFilter = ColorFilter.colorMatrix(
+    ColorMatrix(
+        floatArrayOf(
+            1.03f, 0f, 0f, 0f, 8f,
+            0f, 1.03f, 0f, 0f, 8f,
+            0f, 0f, 1.03f, 0f, 8f,
+            0f, 0f, 0f, 1f, 0f,
+        )
+    )
+)
+
 private fun DrawScope.drawTiles(store: TileStore, source: TileSource, projector: MapProjector) {
     val z = floor(projector.effectiveZoom).toInt().coerceIn(0, source.maxZoom)
     val scale = 2.0.pow(projector.effectiveZoom - z)
@@ -350,7 +369,7 @@ private fun DrawScope.drawTiles(store: TileStore, source: TileSource, projector:
 
             val bitmap = store.tile(source, z, wrappedCol, row)
                 ?: findFallbackTile(store, source, z, wrappedCol, row)?.let { fallback ->
-                    drawFallbackTile(fallback, left, top, tilePx)
+                    drawFallbackTile(fallback, source, left, top, tilePx)
                     null
                 }
 
@@ -362,6 +381,7 @@ private fun DrawScope.drawTiles(store: TileStore, source: TileSource, projector:
                         (tilePx + 1f).roundToInt(),
                         (tilePx + 1f).roundToInt(),
                     ),
+                    colorFilter = if (source == TileSource.STANDARD) standardTileColorFilter else null,
                 )
             }
         }
@@ -403,13 +423,20 @@ private fun findFallbackTile(
     return null
 }
 
-private fun DrawScope.drawFallbackTile(tile: FallbackTile, left: Float, top: Float, tilePx: Float) {
+private fun DrawScope.drawFallbackTile(
+    tile: FallbackTile,
+    source: TileSource,
+    left: Float,
+    top: Float,
+    tilePx: Float,
+) {
     drawImage(
         image = tile.bitmap,
         srcOffset = tile.srcOffset,
         srcSize = tile.srcSize,
         dstOffset = IntOffset(left.roundToInt(), top.roundToInt()),
         dstSize = IntSize((tilePx + 1f).roundToInt(), (tilePx + 1f).roundToInt()),
+        colorFilter = if (source == TileSource.STANDARD) standardTileColorFilter else null,
     )
 }
 

@@ -9,12 +9,12 @@ enum class K {
     // Map screen
     real_gps, location_selected, mock_active, set_mock_location, start_mock_location,
     stop, pause, resume, lat, lng, search_hint, my_location, map_layers, favorites,
-    standard, satellite, terrain, dark_map, accuracy, altitude, speed, bearing, elapsed,
+    standard, satellite, terrain, detailed_streets, dark_map, accuracy, altitude, speed, bearing, elapsed,
     copy, share, save_favorite, saved, copied, close, cancel, confirm, ok, delete, edit, save,
     joystick_mode, joystick_speed, no_results, searching, search_places, recent_searches,
     selected_point, place_unknown, mock_location_active_banner, return_to_real_gps,
     start_confirm_title, start_confirm_body, use_location, show_on_map, add_coordinate,
-    move_here, cancel_selection, select_this_point, new_location_selected,
+    move_here, cancel_selection, select_this_point, select_point_short, new_location_selected,
     field_name, notes, address, coordinates, icon, optional, required_field, invalid_coordinate,
 
     // Routes
@@ -99,6 +99,10 @@ enum class K {
     setup_step_1, setup_step_2, setup_step_3, setup_step_4, open_dev_options,
     open_app_settings, setup_note, mock_not_permitted, mock_start_failed,
     permission_needed, grant_permission, location_off_warning,
+
+    // Foreground mock session notification
+    notification_channel_name, notification_mock_active_title, notification_mock_active_text,
+    notification_stop_action,
 }
 
 private val EN: Map<K, String> = mapOf(
@@ -126,6 +130,7 @@ private val EN: Map<K, String> = mapOf(
     K.standard to "Standard",
     K.satellite to "Satellite",
     K.terrain to "Terrain",
+    K.detailed_streets to "Detailed Streets",
     K.dark_map to "Dark",
     K.accuracy to "Accuracy",
     K.altitude to "Altitude",
@@ -159,6 +164,7 @@ private val EN: Map<K, String> = mapOf(
     K.move_here to "Move Here",
     K.cancel_selection to "Cancel Selection",
     K.select_this_point to "Select This Point",
+    K.select_point_short to "Select",
     K.new_location_selected to "NEW LOCATION SELECTED",
     K.use_location to "Use Location",
     K.show_on_map to "Show on Map",
@@ -427,6 +433,11 @@ private val EN: Map<K, String> = mapOf(
     K.permission_needed to "Location permission is required",
     K.grant_permission to "Grant permission",
     K.location_off_warning to "Device location is turned off",
+
+    K.notification_channel_name to "Mock location session",
+    K.notification_mock_active_title to "Mock location active",
+    K.notification_mock_active_text to "Tap to open · Stop to return to real GPS",
+    K.notification_stop_action to "Stop",
 )
 
 private val AR: Map<K, String> = mapOf(
@@ -454,6 +465,7 @@ private val AR: Map<K, String> = mapOf(
     K.standard to "عادية",
     K.satellite to "قمر صناعي",
     K.terrain to "تضاريس",
+    K.detailed_streets to "شوارع مفصّلة",
     K.dark_map to "داكنة",
     K.accuracy to "الدقة",
     K.altitude to "الارتفاع",
@@ -487,6 +499,7 @@ private val AR: Map<K, String> = mapOf(
     K.move_here to "الانتقال إلى هنا",
     K.cancel_selection to "إلغاء التحديد",
     K.select_this_point to "تحديد هذه النقطة",
+    K.select_point_short to "تحديد",
     K.new_location_selected to "تم تحديد موقع جديد",
     K.use_location to "استخدام الموقع",
     K.show_on_map to "عرض على الخريطة",
@@ -755,6 +768,11 @@ private val AR: Map<K, String> = mapOf(
     K.permission_needed to "إذن الموقع مطلوب",
     K.grant_permission to "منح الإذن",
     K.location_off_warning to "موقع الجهاز مُعطّل",
+
+    K.notification_channel_name to "جلسة الموقع الوهمي",
+    K.notification_mock_active_title to "الموقع الوهمي نشط",
+    K.notification_mock_active_text to "اضغط للفتح · إيقاف للعودة إلى GPS الحقيقي",
+    K.notification_stop_action to "إيقاف",
 )
 
 /** Resolved string table for the active language. */

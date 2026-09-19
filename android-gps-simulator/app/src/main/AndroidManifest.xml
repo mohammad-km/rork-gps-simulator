@@ -16,6 +16,16 @@
         tools:ignore="MockLocation,ProtectedPermissions"
         xmlns:tools="http://schemas.android.com/tools" />
 
+    <!--
+        Required so the active mock session can run in a foreground service that
+        keeps feeding Android the mocked coordinate after the app is backgrounded
+        or closed — the fix for mocking silently reverting to real GPS.
+    -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- Needed on API 33+ for the ongoing "Mock location active" notification. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <uses-feature
         android:name="android.hardware.location.gps"
         android:required="false" />
@@ -37,6 +47,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+            Owns the active mock-location session so it survives the app being
+            backgrounded, navigated away from, or closed. See MockLocationService
+            for why this exists and exactly what it guarantees.
+        -->
+        <service
+            android:name=".location.MockLocationService"
+            android:exported="false"
+            android:foregroundServiceType="location"
+            android:stopWithTask="false" />
     </application>
 
 </manifest>

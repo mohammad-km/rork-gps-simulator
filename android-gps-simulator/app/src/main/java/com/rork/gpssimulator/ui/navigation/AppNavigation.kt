@@ -144,24 +144,34 @@ private fun AppScaffold(viewModel: AppViewModel) {
         viewModel.refreshPermissionState()
     }
 
-    // Ask for location access on first composition.
+    // Ask for location access on first composition. Also request notification
+    // permission on API 33+ so the "Mock location active" foreground-service
+    // notification can actually be shown; the mock session itself does not
+    // depend on this being granted.
     LaunchedEffect(Unit) {
-        permissionLauncher.launch(
-            arrayOf(
-                Manifest.permission.ACCESS_FINE_LOCATION,
-                Manifest.permission.ACCESS_COARSE_LOCATION,
-            ),
-        )
+        val permissions = buildList {
+            add(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        permissionLauncher.launch(permissions.toTypedArray())
     }
 
     // Re-check readiness whenever the app returns to the foreground, since the
     // user may have just selected this app in Developer Options.
+    //
+    // Deliberately no ON_STOP handling here: ON_STOP fires on ordinary
+    // backgrounding (switching to another app, pressing Home) — tying the mock
+    // session's lifetime to it was the root cause of mocking silently
+    // reverting to real GPS. The active session now lives in
+    // MockLocationService, independent of this screen's lifecycle; the
+    // "stop when app closes" preference is honoured in the service's
+    // onTaskRemoved, which only fires when the task is actually removed from
+    // Recents.
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
         viewModel.refreshPermissionState()
-    }
-
-    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
-        viewModel.onAppClosing()
     }
 
     // Surface one-shot messages.

@@ -20,15 +20,31 @@ import java.net.URL
 
 /** Raster tile endpoints used for each map type. */
 enum class TileSource(val id: String, val maxZoom: Int, val attribution: String) {
-    STANDARD("osm", 19, "© OpenStreetMap"),
-    SATELLITE("esri", 18, "© Esri, Maxar"),
-    TERRAIN("topo", 16, "© OpenTopoMap (CC-BY-SA)");
+    STANDARD("osm", 19, "© OpenStreetMap contributors"),
+    SATELLITE("esri", 18, "© Esri, Maxar, Earthstar Geographics"),
+    TERRAIN("topo", 16, "© OpenTopoMap (CC-BY-SA), data © OpenStreetMap contributors, SRTM"),
+
+    /**
+     * A more detailed street basemap than [STANDARD]: the Humanitarian
+     * OpenStreetMap Team (HOT) style, which draws roads, buildings and place
+     * labels more prominently. It is served free of charge and without an API
+     * key by OpenStreetMap France, built directly on OpenStreetMap data, and
+     * requires attribution: the compact credit below is shown in the map's
+     * attribution chip, and the full wording is on the Licenses screen.
+     * Tiles are spread over the a/b/c hosts by tile coordinate.
+     */
+    DETAILED_STREETS(
+        "hot",
+        19,
+        "© OpenStreetMap contributors · Tiles: HOT, hosted by OSM France",
+    );
 
     fun url(z: Int, x: Int, y: Int): String = when (this) {
         STANDARD -> "https://tile.openstreetmap.org/$z/$x/$y.png"
         SATELLITE ->
             "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/$z/$y/$x"
         TERRAIN -> "https://tile.opentopomap.org/$z/$x/$y.png"
+        DETAILED_STREETS -> "https://${"abc"[(x + y) % 3]}.tile.openstreetmap.fr/hot/$z/$x/$y.png"
     }
 
     companion object {
@@ -36,6 +52,7 @@ enum class TileSource(val id: String, val maxZoom: Int, val attribution: String)
             MapType.STANDARD -> STANDARD
             MapType.SATELLITE -> SATELLITE
             MapType.TERRAIN -> TERRAIN
+            MapType.DETAILED_STREETS -> DETAILED_STREETS
         }
     }
 }

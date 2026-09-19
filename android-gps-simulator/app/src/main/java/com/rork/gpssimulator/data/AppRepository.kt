@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import android.util.Log
 import com.rork.gpssimulator.data.model.Geofence
 import com.rork.gpssimulator.data.model.HistoryEntry
+import com.rork.gpssimulator.data.model.MockSessionRecord
 import com.rork.gpssimulator.data.model.SavedKind
 import com.rork.gpssimulator.data.model.SavedLocation
 import com.rork.gpssimulator.data.model.SimRoute
@@ -44,6 +45,32 @@ class AppRepository(context: Context) {
 
     private val _recentSearches = MutableStateFlow(loadList<String>(KEY_RECENT))
     val recentSearches: StateFlow<List<String>> = _recentSearches.asStateFlow()
+
+    private val _mockSession = MutableStateFlow(load(KEY_MOCK_SESSION, MockSessionRecord()))
+    val mockSessionRecord: StateFlow<MockSessionRecord> = _mockSession.asStateFlow()
+
+    // ---- Active mock session (owned by MockLocationService) ----
+
+    /**
+     * Persists the active-session snapshot so it survives process death. This is
+     * a best-effort record only: while [MockLocationService] is alive, its own
+     * in-memory state (via MockSessionBus) is authoritative.
+     */
+    fun updateMockSession(transform: (MockSessionRecord) -> MockSessionRecord) {
+        val next = transform(_mockSession.value)
+        _mockSession.value = next
+        store(KEY_MOCK_SESSION, next)
+    }
+
+    /**
+     * Marks the persisted session as no longer active. This deliberately flips
+     * only the flag instead of resetting to a fresh [MockSessionRecord]: its
+     * default coordinates are NaN, which kotlinx.serialization refuses to encode,
+     * so [store] would fail silently and the old `active = true` record would stay
+     * on disk. The leftover coordinates are harmless, since restoring checks
+     * `active` first.
+     */
+    fun clearMockSession() = updateMockSession { it.copy(active = false) }
 
     // ---- Settings ----
 
@@ -170,6 +197,7 @@ class AppRepository(context: Context) {
         _history.value = emptyList()
         _geofences.value = emptyList()
         _recentSearches.value = emptyList()
+        _mockSession.value = MockSessionRecord()
     }
 
     // ---- Serialization helpers ----
@@ -211,7 +239,23 @@ class AppRepository(context: Context) {
         private const val KEY_HISTORY = "history"
         private const val KEY_GEOFENCES = "geofences"
         private const val KEY_RECENT = "recent_searches"
+        private const val KEY_MOCK_SESSION = "mock_session"
         private const val MAX_HISTORY = 200
         private const val MAX_RECENT = 10
+
+        @Volatile
+        private var instance: AppRepository? = null
+
+        /**
+         * Single process-wide instance. The mock location foreground service and
+         * the ViewModel must observe the exact same StateFlows (settings, routes,
+         * geofences, ...) so that changes made from the UI while a session is
+         * running are seen immediately, rather than each holding its own stale
+         * SharedPreferences snapshot.
+         */
+        fun getInstance(context: Context): AppRepository =
+            instance ?: synchronized(this) {
+                instance ?: AppRepository(context.applicationContext).also { instance = it }
+            }
     }
 }

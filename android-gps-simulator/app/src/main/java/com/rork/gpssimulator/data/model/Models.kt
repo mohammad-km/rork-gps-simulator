@@ -102,6 +102,29 @@ data class SimRoute(
 
 enum class SessionKind { STATIC, ROUTE, JOYSTICK }
 
+/**
+ * Durable snapshot of the mock session owned by [com.rork.gpssimulator.location.MockLocationService].
+ *
+ * Persisted so the last known state survives process death; the service's own
+ * in-memory state (exposed live via MockSessionBus) is always the source of
+ * truth while the service is actually running.
+ */
+@Serializable
+data class MockSessionRecord(
+    val active: Boolean = false,
+    val lat: Double = Double.NaN,
+    val lng: Double = Double.NaN,
+    val altitude: Double = 0.0,
+    val accuracy: Float = 5f,
+    val speedKmh: Double = 0.0,
+    val bearing: Float = 0f,
+    val kind: SessionKind = SessionKind.STATIC,
+    val isPaused: Boolean = false,
+    val sessionStartedAt: Long = 0L,
+    val placeName: String = "",
+    val placeAddress: String = "",
+)
+
 @Serializable
 data class HistoryEntry(
     val id: String,
@@ -135,7 +158,7 @@ data class GeofenceEvent(
 /** The app's three-state mock workflow. */
 enum class MockState { REAL_GPS, SELECTED, MOCK_ACTIVE }
 
-enum class MapType { STANDARD, SATELLITE, TERRAIN }
+enum class MapType { STANDARD, SATELLITE, TERRAIN, DETAILED_STREETS }
 
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 

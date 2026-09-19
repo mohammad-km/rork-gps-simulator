@@ -1,7 +1,13 @@
 package com.rork.gpssimulator.ui
 
 import android.app.Application
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.content.ServiceConnection
+import android.os.IBinder
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rork.gpssimulator.data.AppRepository
@@ -20,7 +26,9 @@ import com.rork.gpssimulator.data.model.SimRoute
 import com.rork.gpssimulator.location.GeocodingService
 import com.rork.gpssimulator.location.MockFailure
 import com.rork.gpssimulator.location.MockLocationController
+import com.rork.gpssimulator.location.MockLocationService
 import com.rork.gpssimulator.location.MockResult
+import com.rork.gpssimulator.location.MockSessionBus
 import com.rork.gpssimulator.location.PlaceResult
 import com.rork.gpssimulator.location.RealLocationSource
 import kotlinx.coroutines.Job
@@ -30,10 +38,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.UUID
-import kotlin.math.cos
-import kotlin.math.min
-import kotlin.math.sin
-import kotlin.random.Random
 
 /** The coordinate the user has aimed at and confirmed, awaiting start. */
 data class SelectedLocation(
@@ -71,10 +75,22 @@ data class DiagnosticsReport(
     val ranAt: Long,
 )
 
+/**
+ * UI-facing state holder. The active mock session itself is no longer owned
+ * here — it lives in [MockLocationService], a foreground service independent
+ * of this ViewModel's lifecycle. This class only:
+ *  - manages the pending "candidate" location the user is aiming at (a UI
+ *    concept that never touches the system location, so it belongs here),
+ *  - sends start/move/pause/stop/joystick commands to the bound service, and
+ *  - mirrors [MockSessionBus]'s live state into the StateFlows the screens
+ *    already read, so no screen needed to change.
+ */
 class AppViewModel(app: Application) : AndroidViewModel(app) {
 
-    private val repository = AppRepository(app)
-    private val mockController = MockLocationController(app)
+    private val repository = AppRepository.getInstance(app)
+
+    /** Used only for the read-only "is mocking possible right now" probe — never to start/push a session. */
+    private val readinessProbe = MockLocationController(app)
     private val realLocation = RealLocationSource(app)
     private val geocoder = GeocodingService()
 
@@ -95,13 +111,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _activePoint = MutableStateFlow<LatLng?>(null)
     val activePoint: StateFlow<LatLng?> = _activePoint.asStateFlow()
 
-    /**
-     * Place details of the coordinate the running session is mocking.
-     *
-     * This is deliberately separate from [selected]: while a session runs,
-     * [selected] holds only a *candidate* the user is considering, so the UI can
-     * offer "Move Here" without ever implying the live session changed.
-     */
     private val _activePlace = MutableStateFlow<SelectedLocation?>(null)
     val activePlace: StateFlow<SelectedLocation?> = _activePlace.asStateFlow()
 
@@ -147,28 +156,57 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     private val _isDiagnosticsRunning = MutableStateFlow(false)
     val isDiagnosticsRunning: StateFlow<Boolean> = _isDiagnosticsRunning.asStateFlow()
 
-    private val _geofenceEvents = MutableStateFlow<List<GeofenceEvent>>(emptyList())
-    val geofenceEvents: StateFlow<List<GeofenceEvent>> = _geofenceEvents.asStateFlow()
-
-    private val _geofenceInside = MutableStateFlow<Set<String>>(emptySet())
-    val geofenceInside: StateFlow<Set<String>> = _geofenceInside.asStateFlow()
+    /** Geofence membership is evaluated inside the service's push loop; this just mirrors it. */
+    val geofenceEvents: StateFlow<List<GeofenceEvent>> = MockSessionBus.geofenceEvents
+    val geofenceInside: StateFlow<Set<String>> = MockSessionBus.geofenceInside
 
     /** Set when the map should recentre (e.g. after "my location" or stop). */
     private val _cameraTarget = MutableStateFlow<Pair<LatLng, Float?>?>(null)
     val cameraTarget: StateFlow<Pair<LatLng, Float?>?> = _cameraTarget.asStateFlow()
 
-    private var pushJob: Job? = null
-    private var timerJob: Job? = null
     private var searchJob: Job? = null
     private var resolveJob: Job? = null
-    private var sessionStartedAt = 0L
-    private var routeDistanceTraveled = 0.0
-    private var joystickVector: Pair<Float, Float>? = null
+    private var elapsedTickerJob: Job? = null
+    private var wasSessionActive = false
+
+    // ---------- Service binding ----------
+
+    @Volatile
+    private var boundService: MockLocationService? = null
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
+            boundService = (binder as? MockLocationService.LocalBinder)?.getService()
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            boundService = null
+        }
+    }
 
     init {
+        // Bind eagerly (without starting it as foreground) so that by the time
+        // the user presses Start, the direct method-call path to the service is
+        // already available. Binding alone does not promote it to foreground —
+        // that only happens inside MockLocationService.startSession.
+        app.bindService(Intent(app, MockLocationService::class.java), serviceConnection, Context.BIND_AUTO_CREATE)
+
+        viewModelScope.launch {
+            MockSessionBus.session.collect { session -> applySession(session) }
+        }
+        viewModelScope.launch {
+            MockSessionBus.events.collect { event ->
+                when (event) {
+                    is MockSessionBus.Event.Failure -> postMessage(event.message, isError = true)
+                    MockSessionBus.Event.RouteFinished -> Unit
+                }
+            }
+        }
+
         refreshPermissionState()
         val restored = settings.value
         if (restored.restoreLastLocation &&
+            MockSessionBus.session.value == null &&
             !restored.lastMockLat.isNaN() && !restored.lastMockLng.isNaN()
         ) {
             val point = LatLng(restored.lastMockLat, restored.lastMockLng)
@@ -180,12 +218,66 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** Reflects the service's live session into every screen-facing StateFlow. */
+    private fun applySession(session: MockSessionBus.Session?) {
+        if (session != null) {
+            _mockState.value = MockState.MOCK_ACTIVE
+            _activePoint.value = session.point
+            _activePlace.value = SelectedLocation(session.point, session.placeName, session.placeAddress)
+            _sessionKind.value = session.kind
+            _isPaused.value = session.isPaused
+            _currentSpeedKmh.value = session.speedKmh
+            _currentBearing.value = session.bearing
+            _routeProgress.value = session.route?.let { route ->
+                RouteProgress(route, session.routeTraveledMeters, route.distanceMeters, session.speedKmh, session.isPaused)
+            }
+            ensureElapsedTicker(session.sessionStartedAt)
+        } else {
+            val wasActive = wasSessionActive
+            _activePoint.value = null
+            _activePlace.value = null
+            _sessionKind.value = SessionKind.STATIC
+            _isPaused.value = false
+            _currentSpeedKmh.value = 0.0
+            _currentBearing.value = 0f
+            _routeProgress.value = null
+            elapsedTickerJob?.cancel()
+            _elapsedMs.value = 0L
+            _mockState.value = if (_selected.value != null) MockState.SELECTED else MockState.REAL_GPS
+
+            if (wasActive) {
+                _selected.value = null
+                returnToRealLocation(recenter = settings.value.returnToRealOnStop)
+                refreshPermissionState()
+            }
+        }
+        wasSessionActive = session != null
+    }
+
+    private fun ensureElapsedTicker(sessionStartedAt: Long) {
+        if (elapsedTickerJob?.isActive == true) return
+        elapsedTickerJob = viewModelScope.launch {
+            while (MockSessionBus.session.value != null) {
+                _elapsedMs.value = System.currentTimeMillis() - sessionStartedAt
+                delay(1000L)
+            }
+        }
+    }
+
     // ---------- Permissions & readiness ----------
 
     fun refreshPermissionState() {
         val granted = realLocation.hasPermission()
         _permissionGranted.value = granted
-        _mockReadiness.value = mockController.checkReadiness(granted)
+        // A readiness probe briefly installs/removes its own test provider,
+        // which would clobber the real provider MockLocationService is
+        // actively feeding. When a session is running, readiness is READY by
+        // definition — skip the probe entirely.
+        _mockReadiness.value = if (MockSessionBus.session.value != null) {
+            MockReadiness.READY
+        } else {
+            readinessProbe.checkReadiness(granted)
+        }
         if (granted) {
             realLocation.lastKnown(settings.value.usePlayServices)?.let { _realSample.value = it }
             startRealUpdates()
@@ -197,7 +289,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         realLocation.startUpdates(settings.value.usePlayServices, 2000L) { sample ->
             // While mocking, the system feed echoes our own test location; keep the
             // last genuine fix so "return to real GPS" still has somewhere to go.
-            if (_mockState.value != MockState.MOCK_ACTIVE) {
+            if (MockSessionBus.session.value == null) {
                 _realSample.value = sample
             }
         }
@@ -252,14 +344,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ---------- Mock session lifecycle ----------
+    // ---------- Mock session control (delegates to MockLocationService) ----------
 
     /**
-     * Starts the system-level mock location. The MOCK_ACTIVE state is only entered
-     * when the platform confirms the test provider actually started.
+     * Starts the system-level mock location. The MOCK_ACTIVE state is only
+     * reflected once [MockSessionBus] confirms the service actually started —
+     * this call itself only reports whether the *request* was accepted.
      */
     fun startMock(kind: SessionKind = SessionKind.STATIC, route: SimRoute? = null) {
-        val point = _selected.value?.point ?: run {
+        val selection = _selected.value ?: run {
             postMessage("Select a location first", isError = true)
             return
         }
@@ -268,16 +361,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _mockReadiness.value = MockReadiness.PERMISSION_REQUIRED
             return
         }
+        val service = requireBoundService() ?: return
 
-        val config = settings.value
-        val result = mockController.start(
-            point = applyRandomization(point, config),
-            accuracy = config.accuracyM,
-            altitude = config.altitudeM.toDouble(),
-            speed = 0f,
-            bearing = config.bearingDeg,
-        )
-
+        val context = getApplication<Application>()
+        ContextCompat.startForegroundService(context, Intent(context, MockLocationService::class.java))
+        val result = service.startSession(kind, selection.point, selection.name, selection.address, route)
         when (result) {
             is MockResult.Failure -> {
                 _mockReadiness.value = when (result.reason) {
@@ -286,45 +374,20 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                     MockFailure.PROVIDER_ERROR -> MockReadiness.SETUP_REQUIRED
                 }
                 postMessage(result.message, isError = true)
-                return
             }
-            MockResult.Success -> Unit
+            MockResult.Success -> {
+                // The candidate has been consumed by the service; a non-null
+                // selection from now on means "a new candidate is pending",
+                // which is what drives the Move Here action.
+                _selected.value = null
+                _mockReadiness.value = MockReadiness.READY
+            }
         }
-
-        _mockState.value = MockState.MOCK_ACTIVE
-        _mockReadiness.value = MockReadiness.READY
-        _activePoint.value = point
-        _activePlace.value = _selected.value?.copy(point = point)
-        // The candidate has been consumed; a non-null selection from now on means
-        // "a new candidate is pending", which is what drives the Move Here action.
-        _selected.value = null
-        _sessionKind.value = kind
-        _isPaused.value = false
-        _currentSpeedKmh.value = 0.0
-        sessionStartedAt = System.currentTimeMillis()
-        routeDistanceTraveled = 0.0
-
-        repository.updateSettings { it.copy(lastMockLat = point.lat, lastMockLng = point.lng) }
-
-        if (kind == SessionKind.ROUTE && route != null) {
-            _routeProgress.value = RouteProgress(route, 0.0, route.distanceMeters, route.speedKmh, false)
-            startRouteLoop(route)
-        } else {
-            startStaticLoop()
-        }
-        startTimer()
-        evaluateGeofences(point)
     }
 
-    /**
-     * Redirects the *already running* session to [point].
-     *
-     * The system test providers stay installed and the session keeps its identity
-     * (timer, history entry): only the pushed coordinate changes. This is what
-     * makes A → B switching instant for a developer testing a flow.
-     */
+    /** Redirects the *already running* session to [point], or starts one if none is active. */
     fun moveMockTo(point: LatLng) {
-        if (_mockState.value != MockState.MOCK_ACTIVE) {
+        if (MockSessionBus.session.value == null) {
             startMock()
             return
         }
@@ -332,114 +395,36 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             postMessage("Invalid coordinate", isError = true)
             return
         }
+        val service = requireBoundService() ?: return
+        val selection = _selected.value
 
-        val config = settings.value
-        val result = mockController.push(
-            point = applyRandomization(point, config),
-            accuracy = config.accuracyM,
-            altitude = config.altitudeM.toDouble(),
-            speed = 0f,
-            bearing = config.bearingDeg,
-        )
-        if (result is MockResult.Failure) {
-            postMessage(result.message, isError = true)
-            endSession(returnToReal = settings.value.returnToRealOnStop)
-            return
+        val result = service.moveTo(point, selection?.name.orEmpty(), selection?.address.orEmpty())
+        when (result) {
+            is MockResult.Failure -> postMessage(result.message, isError = true)
+            MockResult.Success -> {
+                _selected.value = null
+                moveCamera(point)
+            }
         }
-
-        // Jumping to a fixed coordinate ends any route playback, but keeps the
-        // same mock session alive.
-        if (_sessionKind.value == SessionKind.ROUTE) {
-            pushJob?.cancel()
-            _routeProgress.value = null
-            _sessionKind.value = SessionKind.STATIC
-            startStaticLoop()
-        }
-
-        _activePoint.value = point
-        _activePlace.value = _selected.value?.copy(point = point)
-            ?: SelectedLocation(point, "", "")
-        _selected.value = null
-        _isPaused.value = false
-        _currentSpeedKmh.value = 0.0
-        joystickVector = null
-        repository.updateSettings { it.copy(lastMockLat = point.lat, lastMockLng = point.lng) }
-        moveCamera(point)
-        evaluateGeofences(point)
     }
 
-    /**
-     * Stops mocking completely and returns the app to the REAL GPS state.
-     *
-     * The real fix is always re-read so the app is truly back on device GPS; the
-     * "return to real location" preference only decides whether the camera follows.
-     */
+    /** Stops mocking completely and returns the app to the REAL GPS state. */
     fun stopMock() {
-        endSession(returnToReal = true)
-    }
-
-    private fun endSession(returnToReal: Boolean) {
-        val wasActive = _mockState.value == MockState.MOCK_ACTIVE
-        pushJob?.cancel()
-        pushJob = null
-        timerJob?.cancel()
-        timerJob = null
-        mockController.stop()
-
-        if (wasActive) {
-            recordHistory()
-        }
-
-        _mockState.value = MockState.REAL_GPS
-        _activePoint.value = null
-        _activePlace.value = null
-        _selected.value = null
-        _routeProgress.value = null
-        _sessionKind.value = SessionKind.STATIC
-        _isPaused.value = false
-        _elapsedMs.value = 0L
-        _currentSpeedKmh.value = 0.0
-        joystickVector = null
-        repository.updateSettings { it.copy(lastMockLat = Double.NaN, lastMockLng = Double.NaN) }
-
-        if (wasActive && returnToReal) {
-            returnToRealLocation(recenter = settings.value.returnToRealOnStop)
-        }
-        refreshPermissionState()
+        boundService?.stopSession()
     }
 
     /**
      * Freezes or resumes dynamic movement (route playback / joystick) while the
-     * mock session itself stays fully alive: providers stay installed and the
-     * last mocked coordinate keeps being pushed. This is deliberately NOT a stop —
+     * mock session itself stays fully alive. This is deliberately NOT a stop —
      * only [stopMock] returns the device to real GPS.
      */
     fun togglePause() {
-        if (_mockState.value != MockState.MOCK_ACTIVE) return
-        val paused = !_isPaused.value
-        _isPaused.value = paused
-        _routeProgress.value = _routeProgress.value?.copy(isPaused = paused)
-        if (paused) {
-            _currentSpeedKmh.value = 0.0
-            // Hold position immediately rather than waiting for the next tick.
-            _activePoint.value?.let { push(it, 0.0, settings.value) }
-        }
+        boundService?.togglePause()
     }
 
-    private fun recordHistory() {
-        val point = _activePoint.value ?: return
-        val selection = _activePlace.value
-        repository.addHistory(
-            HistoryEntry(
-                id = UUID.randomUUID().toString(),
-                name = selection?.name?.takeIf { it.isNotBlank() } ?: "Dropped pin",
-                address = selection?.address.orEmpty(),
-                point = point,
-                startedAt = sessionStartedAt,
-                durationMs = System.currentTimeMillis() - sessionStartedAt,
-                kind = _sessionKind.value,
-            ),
-        )
+    /** Feeds a normalised joystick vector; (0,0) stops movement. */
+    fun setJoystickVector(x: Float, y: Float) {
+        boundService?.setJoystickVector(x, y)
     }
 
     /**
@@ -457,198 +442,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // ---------- Location push loops ----------
-
-    private fun startStaticLoop() {
-        pushJob?.cancel()
-        pushJob = viewModelScope.launch {
-            while (true) {
-                val config = settings.value
-                delay(config.updateIntervalMs.toLong().coerceIn(200L, 10_000L))
-                if (_mockState.value != MockState.MOCK_ACTIVE) break
-
-                // Paused freezes movement but must NOT stop mocking: keep pushing
-                // the current coordinate so Android holds the mocked fix instead
-                // of falling back to the real GPS provider.
-                if (_isPaused.value) {
-                    val held = _activePoint.value ?: break
-                    if (!push(held, 0.0, config)) break
-                    continue
-                }
-
-                val base = _activePoint.value ?: break
-                val target = joystickVector?.let { (dirX, dirY) ->
-                    advanceJoystick(base, dirX, dirY, config)
-                } ?: applyRandomization(base, config)
-
-                if (joystickVector != null) _activePoint.value = target
-
-                if (!push(target, _currentSpeedKmh.value, config)) break
-            }
-        }
-    }
-
-    private fun startRouteLoop(route: SimRoute) {
-        pushJob?.cancel()
-        pushJob = viewModelScope.launch {
-            val points = if (route.loop && route.points.size > 1) {
-                route.points + route.points.first()
-            } else {
-                route.points
-            }
-            val total = points.zipWithNext().sumOf { (a, b) -> a.distanceTo(b) }
-            if (total <= 0.0) return@launch
-
-            var traveled = 0.0
-            while (true) {
-                val config = settings.value
-                val stepMs = config.updateIntervalMs.toLong().coerceIn(200L, 5_000L)
-                delay(stepMs)
-                if (_mockState.value != MockState.MOCK_ACTIVE) break
-
-                // Freeze at the current coordinate without surrendering the mock:
-                // `traveled` is not advanced, so Resume continues from here.
-                if (_isPaused.value) {
-                    val held = _activePoint.value ?: break
-                    if (!push(held, 0.0, config)) break
-                    continue
-                }
-
-                val speedKmh = route.speedKmh
-                val stepMeters = (speedKmh / 3.6) * (stepMs / 1000.0)
-                traveled += stepMeters
-
-                if (traveled >= total) {
-                    if (route.loop) {
-                        traveled = 0.0
-                    } else {
-                        val end = points.last()
-                        _activePoint.value = end
-                        _routeProgress.value = _routeProgress.value?.copy(
-                            traveledMeters = total,
-                            totalMeters = total,
-                        )
-                        _currentSpeedKmh.value = 0.0
-                        push(end, 0.0, config)
-                        evaluateGeofences(end)
-                        break
-                    }
-                }
-
-                val position = pointAlong(points, traveled, config.routeInterpolation)
-                _activePoint.value = position.first
-                _currentBearing.value = position.second
-                _currentSpeedKmh.value = speedKmh
-                _routeProgress.value = _routeProgress.value?.copy(
-                    traveledMeters = min(traveled, total),
-                    totalMeters = total,
-                    speedKmh = speedKmh,
-                )
-
-                if (!push(position.first, speedKmh, config, position.second)) break
-                evaluateGeofences(position.first)
-            }
-        }
-    }
-
-    /** Pushes one update; returns false when the platform revoked mocking. */
-    private fun push(
-        point: LatLng,
-        speedKmh: Double,
-        config: AppSettings,
-        bearingOverride: Float? = null,
-    ): Boolean {
-        val result = mockController.push(
-            point = point,
-            accuracy = config.accuracyM,
-            altitude = config.altitudeM.toDouble(),
-            speed = (speedKmh / 3.6).toFloat(),
-            bearing = bearingOverride ?: config.bearingDeg,
-        )
-        if (result is MockResult.Failure) {
-            Log.w(TAG, "Mock push failed, stopping session")
-            postMessage(result.message, isError = true)
-            endSession(returnToReal = settings.value.returnToRealOnStop)
-            return false
-        }
-        return true
-    }
-
-    private fun startTimer() {
-        timerJob?.cancel()
-        timerJob = viewModelScope.launch {
-            while (_mockState.value == MockState.MOCK_ACTIVE) {
-                _elapsedMs.value = System.currentTimeMillis() - sessionStartedAt
-                delay(1000L)
-            }
-        }
-    }
-
-    /** Position and bearing at [distance] meters along the polyline. */
-    private fun pointAlong(
-        points: List<LatLng>,
-        distance: Double,
-        interpolate: Boolean,
-    ): Pair<LatLng, Float> {
-        var remaining = distance
-        for (i in 0 until points.lastIndex) {
-            val a = points[i]
-            val b = points[i + 1]
-            val segment = a.distanceTo(b)
-            if (segment <= 0.0) continue
-            if (remaining <= segment) {
-                val t = (remaining / segment).coerceIn(0.0, 1.0)
-                val position = if (interpolate) a.lerp(b, t) else a
-                return position to a.bearingTo(b)
-            }
-            remaining -= segment
-        }
-        val last = points.last()
-        val prev = points.getOrElse(points.lastIndex - 1) { last }
-        return last to prev.bearingTo(last)
-    }
-
-    private fun applyRandomization(point: LatLng, config: AppSettings): LatLng {
-        if (!config.randomizeEnabled && !config.coordinateVariation) return point
-        val radius = if (config.randomizeEnabled) config.randomizationRadiusM.toDouble() else 1.5
-        if (radius <= 0.0) return point
-        // Uniform sample inside the circle, so drift never exceeds the radius.
-        val angle = Random.nextDouble(0.0, 360.0)
-        val magnitude = radius * kotlin.math.sqrt(Random.nextDouble(0.0, 1.0))
-        return point.offset(magnitude, angle)
-    }
-
-    private fun advanceJoystick(
-        base: LatLng,
-        dirX: Float,
-        dirY: Float,
-        config: AppSettings,
-    ): LatLng {
-        val magnitude = kotlin.math.hypot(dirX, dirY).coerceIn(0f, 1f)
-        if (magnitude < 0.05f) {
-            _currentSpeedKmh.value = 0.0
-            return base
-        }
-        val speedKmh = config.speedKmh * magnitude
-        _currentSpeedKmh.value = speedKmh
-        val stepMeters = (speedKmh / 3.6) * (config.updateIntervalMs / 1000.0)
-        // Screen up (negative Y) is north.
-        val bearing = (Math.toDegrees(kotlin.math.atan2(dirX.toDouble(), -dirY.toDouble())) + 360.0) % 360.0
-        _currentBearing.value = bearing.toFloat()
-        val next = base.offset(stepMeters, bearing)
-        evaluateGeofences(next)
-        return next
-    }
-
-    /** Feeds a normalised joystick vector; (0,0) stops movement. */
-    fun setJoystickVector(x: Float, y: Float) {
-        joystickVector = if (kotlin.math.hypot(x, y) < 0.05f) null else x to y
-        if (joystickVector == null) _currentSpeedKmh.value = 0.0
-        if (_mockState.value == MockState.MOCK_ACTIVE && _sessionKind.value != SessionKind.ROUTE) {
-            _sessionKind.value = if (joystickVector != null) SessionKind.JOYSTICK else SessionKind.STATIC
-        }
-    }
-
     // ---------- Routes ----------
 
     fun startRoute(route: SimRoute) {
@@ -656,13 +449,24 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             postMessage("Add at least two points", isError = true)
             return
         }
+        if (!_permissionGranted.value) {
+            postMessage("Location permission is required", isError = true)
+            _mockReadiness.value = MockReadiness.PERMISSION_REQUIRED
+            return
+        }
+        val service = requireBoundService() ?: return
         val start = route.points.first()
-        // A route is a different kind of session, so the previous one ends — but
-        // without bouncing the camera back to the real position first.
-        if (_mockState.value == MockState.MOCK_ACTIVE) endSession(returnToReal = false)
-        _selected.value = SelectedLocation(start, route.name, "")
-        moveCamera(start)
-        startMock(SessionKind.ROUTE, route)
+
+        val context = getApplication<Application>()
+        ContextCompat.startForegroundService(context, Intent(context, MockLocationService::class.java))
+        val result = service.startSession(SessionKind.ROUTE, start, route.name, "", route)
+        when (result) {
+            is MockResult.Failure -> postMessage(result.message, isError = true)
+            MockResult.Success -> {
+                _selected.value = null
+                moveCamera(start)
+            }
+        }
     }
 
     fun saveRoute(route: SimRoute) = repository.upsertRoute(route)
@@ -734,36 +538,6 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
 
     fun deleteGeofence(id: String) = repository.deleteGeofence(id)
 
-    /** Recomputes inside/outside membership and logs transitions. */
-    private fun evaluateGeofences(point: LatLng) {
-        val fences = geofences.value
-        if (fences.isEmpty()) return
-        val previous = _geofenceInside.value
-        val current = fences.filter { point.distanceTo(it.center) <= it.radiusMeters }
-            .map { it.id }
-            .toSet()
-
-        val newEvents = mutableListOf<GeofenceEvent>()
-        fences.forEach { fence ->
-            val wasInside = previous.contains(fence.id)
-            val isInside = current.contains(fence.id)
-            if (wasInside != isInside) {
-                newEvents.add(
-                    GeofenceEvent(
-                        geofenceId = fence.id,
-                        geofenceName = fence.name,
-                        entered = isInside,
-                        timestamp = System.currentTimeMillis(),
-                    ),
-                )
-            }
-        }
-        if (newEvents.isNotEmpty()) {
-            _geofenceEvents.value = (newEvents + _geofenceEvents.value).take(60)
-        }
-        _geofenceInside.value = current
-    }
-
     // ---------- Search ----------
 
     fun search(query: String) {
@@ -819,7 +593,11 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
             _diagnostics.value = DiagnosticsReport(
                 realGpsAvailable = realLocation.isLocationEnabled(),
                 permissionGranted = granted,
-                mockReadiness = mockController.checkReadiness(granted),
+                mockReadiness = if (MockSessionBus.session.value != null) {
+                    MockReadiness.READY
+                } else {
+                    readinessProbe.checkReadiness(granted)
+                },
                 providerName = realLocation.activeProviderName(settings.value.usePlayServices),
                 networkAvailable = realLocation.isNetworkAvailable(),
                 gpsEnabled = realLocation.isGpsProviderEnabled(),
@@ -851,10 +629,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun deleteAllLocalData() {
-        if (_mockState.value == MockState.MOCK_ACTIVE) endSession(returnToReal = false)
+        if (MockSessionBus.session.value != null) boundService?.stopSession()
         repository.deleteAllLocalData()
-        _geofenceEvents.value = emptyList()
-        _geofenceInside.value = emptySet()
+        MockSessionBus.resetGeofenceState()
         _diagnostics.value = null
     }
 
@@ -868,23 +645,26 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         _message.value = null
     }
 
-    // ---------- Lifecycle ----------
+    // ---------- Helpers ----------
 
-    /** Called when the app is intentionally closed. */
-    fun onAppClosing() {
-        if (settings.value.stopOnAppClose && _mockState.value == MockState.MOCK_ACTIVE) {
-            endSession(returnToReal = false)
+    private fun requireBoundService(): MockLocationService? {
+        val service = boundService
+        if (service == null) {
+            Log.w(TAG, "Mock location service not yet bound; ignoring command")
+            postMessage("Still starting up — try again in a moment", isError = true)
         }
+        return service
     }
+
+    // ---------- Lifecycle ----------
 
     override fun onCleared() {
         super.onCleared()
-        pushJob?.cancel()
-        timerJob?.cancel()
+        elapsedTickerJob?.cancel()
         realLocation.stopUpdates()
-        if (settings.value.stopOnAppClose) {
-            mockController.stop()
-        }
+        // Deliberately does NOT touch the mock session: MockLocationService
+        // owns that lifetime entirely, independent of this ViewModel.
+        runCatching { getApplication<Application>().unbindService(serviceConnection) }
     }
 
     companion object {

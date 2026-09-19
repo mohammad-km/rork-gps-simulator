@@ -225,7 +225,12 @@ fun LicensesScreen(
         Triple(
             "OpenTopoMap",
             "Terrain map tiles",
-            "© OpenTopoMap — CC-BY-SA 3.0",
+            "© OpenTopoMap (CC-BY-SA) — data © OpenStreetMap contributors, SRTM",
+        ),
+        Triple(
+            "Humanitarian OpenStreetMap Team (HOT)",
+            "Detailed street map tiles",
+            "© OpenStreetMap contributors — Tiles style by Humanitarian OpenStreetMap Team, hosted by OpenStreetMap France",
         ),
         Triple(
             "Jetpack Compose & AndroidX",

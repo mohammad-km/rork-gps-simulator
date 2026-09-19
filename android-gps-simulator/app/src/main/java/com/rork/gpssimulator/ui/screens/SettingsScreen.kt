@@ -315,12 +315,13 @@ fun SettingsScreen(
                         )
                         RowDivider()
                     }
-                    if (filter.matches(strings[K.map_type], "map", "satellite", "terrain")) {
+                    if (filter.matches(strings[K.map_type], "map", "satellite", "terrain", "streets")) {
                         SettingRow(
                             icon = Icons.Default.Layers,
                             title = strings[K.map_type],
                             value = when (settings.mapType) {
                                 MapType.STANDARD -> strings[K.standard]
+                                MapType.DETAILED_STREETS -> strings[K.detailed_streets]
                                 MapType.SATELLITE -> strings[K.satellite]
                                 MapType.TERRAIN -> strings[K.terrain]
                             },
@@ -964,6 +965,7 @@ fun SettingsScreen(
             title = strings[K.map_type],
             options = listOf(
                 SelectionOption(MapType.STANDARD, strings[K.standard]),
+                SelectionOption(MapType.DETAILED_STREETS, strings[K.detailed_streets]),
                 SelectionOption(MapType.SATELLITE, strings[K.satellite]),
                 SelectionOption(MapType.TERRAIN, strings[K.terrain]),
             ),

@@ -51,12 +51,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDirection
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.rork.gpssimulator.data.model.LatLng
@@ -76,6 +80,7 @@ import com.rork.gpssimulator.ui.map.MapMarker
 import com.rork.gpssimulator.ui.map.MapPolyline
 import com.rork.gpssimulator.ui.map.MapView
 import com.rork.gpssimulator.ui.map.MarkerStyle
+import com.rork.gpssimulator.ui.map.TileSource
 import com.rork.gpssimulator.ui.map.rememberMapCameraState
 import com.rork.gpssimulator.ui.theme.LocalAppColors
 import com.rork.gpssimulator.ui.theme.MonoValueStyle
@@ -309,6 +314,19 @@ fun MapScreen(
             MapControlButton(Icons.Default.Star, strings[K.favorites], onOpenFavorites)
         }
 
+        // ---- Map attribution ----
+        // Credit for the tiles of the active map type. It sits in the safe gap
+        // below the bottom controls, using the same insets as that column, so it
+        // can never overlap a control or the side buttons, and it follows the map
+        // type on its own because it reads settings.mapType.
+        AttributionChip(
+            text = TileSource.of(settings.mapType).attribution,
+            modifier = Modifier
+                .align(Alignment.BottomStart)
+                .navigationBarsPadding()
+                .padding(start = 8.dp, bottom = bottomInset + 3.dp),
+        )
+
         // ---- Bottom controls ----
         // Every floating bottom control lives in this single column, so they can
         // never overlap each other or the navigation bar. The column clears the
@@ -340,19 +358,14 @@ fun MapScreen(
             }
 
             if (isMockActive) {
-                // Aim a new candidate without interrupting the running session.
-                SelectPointButton(
-                    label = strings[K.select_this_point],
-                    lat = camera.centerLat,
-                    lng = camera.centerLng,
-                    onClick = { viewModel.selectPoint(camera.center) },
-                )
-                Spacer(Modifier.height(16.dp))
+                // Select aims a new candidate without interrupting the running session.
                 ActiveControls(
                     showPause = isMotionSession,
                     isPaused = isPaused,
+                    selectPointLabel = strings[K.select_point_short],
                     pauseLabel = if (isPaused) strings[K.resume] else strings[K.pause],
                     stopLabel = strings[K.stop],
+                    onSelectPoint = { viewModel.selectPoint(camera.center) },
                     onPause = { viewModel.togglePause() },
                     onStop = { viewModel.stopMock() },
                 )
@@ -382,6 +395,7 @@ fun MapScreen(
             title = strings[K.map_type],
             options = listOf(
                 SelectionOption(MapType.STANDARD, strings[K.standard]),
+                SelectionOption(MapType.DETAILED_STREETS, strings[K.detailed_streets]),
                 SelectionOption(MapType.SATELLITE, strings[K.satellite]),
                 SelectionOption(MapType.TERRAIN, strings[K.terrain]),
             ),
@@ -492,6 +506,55 @@ private fun StatusPill(text: String, dotColor: Color, modifier: Modifier = Modif
     }
 }
 
+/** Opaque backing for the caption under a round control, so it stays legible over any map tile. */
+@Composable
+private fun ButtonCaption(text: String) {
+    Surface(
+        modifier = Modifier.shadow(4.dp, RoundedCornerShape(50)),
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surface,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+        )
+    }
+}
+
+/**
+ * Small, muted tile-provider credit for a bottom corner of the map. Its text is
+ * sized in dp on purpose: the chip lives in the [ControlSafeGap] below the
+ * controls and must not grow into them when the system font scale is raised.
+ */
+@Composable
+private fun AttributionChip(text: String, modifier: Modifier = Modifier) {
+    val density = LocalDensity.current
+    Surface(
+        modifier = modifier.shadow(2.dp, RoundedCornerShape(50)),
+        shape = RoundedCornerShape(50),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.8f),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall.copy(
+                fontSize = with(density) { 9.dp.toSp() },
+                lineHeight = with(density) { 11.dp.toSp() },
+                // The credits are English text that starts with "©": keep them
+                // left-to-right in an RTL layout too, where the bidi algorithm
+                // would otherwise push the leading "©" to the end of the line.
+                textDirection = TextDirection.Ltr,
+            ),
+            color = LocalAppColors.current.muted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 1.dp),
+        )
+    }
+}
+
 @Composable
 private fun CoordinatePill(
     lat: Double,
@@ -559,16 +622,60 @@ private fun MapControlButton(
 private fun ActiveControls(
     showPause: Boolean,
     isPaused: Boolean,
+    selectPointLabel: String,
     pauseLabel: String,
     stopLabel: String,
+    onSelectPoint: () -> Unit,
     onPause: () -> Unit,
     onStop: () -> Unit,
 ) {
     val appColors = LocalAppColors.current
+    // A soft, repeating halo behind STOP so the exit from a live session is always noticeable.
+    val infiniteTransition = rememberInfiniteTransition(label = "stopPulse")
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.4f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "stopPulseScale",
+    )
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.6f,
+        targetValue = 0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(900, easing = androidx.compose.animation.core.FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "stopPulseAlpha",
+    )
     Row(
         horizontalArrangement = Arrangement.spacedBy(28.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Surface(
+                modifier = Modifier
+                    .size(66.dp)
+                    .shadow(10.dp, CircleShape)
+                    .clickable(role = Role.Button, onClick = onSelectPoint),
+                shape = CircleShape,
+                color = MaterialTheme.colorScheme.surface,
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        Icons.Default.Add,
+                        contentDescription = selectPointLabel,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(26.dp),
+                    )
+                }
+            }
+            Spacer(Modifier.height(7.dp))
+            ButtonCaption(selectPointLabel)
+        }
+
         if (showPause) {
             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Surface(
@@ -589,40 +696,38 @@ private fun ActiveControls(
                     }
                 }
                 Spacer(Modifier.height(7.dp))
-                Text(
-                    text = pauseLabel,
-                    style = MaterialTheme.typography.labelMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurface,
-                )
+                ButtonCaption(pauseLabel)
             }
         }
 
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Surface(
-                modifier = Modifier
-                    .size(82.dp)
-                    .shadow(14.dp, CircleShape)
-                    .clickable(role = Role.Button, onClick = onStop),
-                shape = CircleShape,
-                color = appColors.danger,
-            ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Icon(
-                        Icons.Default.Close,
-                        contentDescription = stopLabel,
-                        tint = Color.White,
-                        modifier = Modifier.size(36.dp),
-                    )
+            Box(contentAlignment = Alignment.Center) {
+                Box(
+                    modifier = Modifier
+                        .size(82.dp)
+                        .scale(pulseScale)
+                        .background(appColors.danger.copy(alpha = pulseAlpha), CircleShape),
+                )
+                Surface(
+                    modifier = Modifier
+                        .size(82.dp)
+                        .shadow(14.dp, CircleShape)
+                        .clickable(role = Role.Button, onClick = onStop),
+                    shape = CircleShape,
+                    color = appColors.danger,
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Default.Close,
+                            contentDescription = stopLabel,
+                            tint = Color.White,
+                            modifier = Modifier.size(36.dp),
+                        )
+                    }
                 }
             }
             Spacer(Modifier.height(7.dp))
-            Text(
-                text = stopLabel,
-                style = MaterialTheme.typography.labelMedium,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
+            ButtonCaption(stopLabel)
         }
     }
 }
