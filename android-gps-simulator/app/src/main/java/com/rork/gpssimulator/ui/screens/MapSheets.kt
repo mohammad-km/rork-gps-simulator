@@ -64,6 +64,7 @@ import com.rork.gpssimulator.ui.SelectedLocation
 import com.rork.gpssimulator.ui.components.StatusDot
 import com.rork.gpssimulator.ui.map.MapMarker
 import com.rork.gpssimulator.ui.map.MapView
+import com.rork.gpssimulator.ui.map.MarkerStyle
 import com.rork.gpssimulator.ui.map.rememberMapCameraState
 import com.rork.gpssimulator.ui.theme.LocalAppColors
 import com.rork.gpssimulator.ui.theme.MonoValueStyle
@@ -128,7 +129,11 @@ fun LocationPreviewSheet(
                 camera = previewCamera,
                 mapType = mapType,
                 markers = listOf(
-                    MapMarker(selection.point, MaterialTheme.colorScheme.primary),
+                    MapMarker(
+                        point = selection.point,
+                        color = MaterialTheme.colorScheme.primary,
+                        style = MarkerStyle.CANDIDATE,
+                    ),
                 ),
                 modifier = Modifier
                     .padding(horizontal = 16.dp)

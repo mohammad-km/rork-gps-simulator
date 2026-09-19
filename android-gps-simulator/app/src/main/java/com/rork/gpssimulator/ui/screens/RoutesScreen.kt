@@ -20,12 +20,14 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DirectionsBike
 import androidx.compose.material.icons.filled.DirectionsCar
 import androidx.compose.material.icons.filled.DirectionsWalk
 import androidx.compose.material.icons.filled.Loop
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Route
 import androidx.compose.material.icons.filled.Search
@@ -397,14 +399,16 @@ private fun RouteProgressPanel(
             )
             IconButton(onClick = onTogglePause) {
                 Icon(
-                    imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Loop,
+                    imageVector = if (isPaused) Icons.Default.PlayArrow else Icons.Default.Pause,
                     contentDescription = if (isPaused) strings[K.resume] else strings[K.pause],
                     tint = MaterialTheme.colorScheme.onPrimaryContainer,
                 )
             }
+            // Stop reads as the same red X used on the map, never a delete icon:
+            // the two actions must look identical everywhere they appear.
             IconButton(onClick = onStop) {
                 Icon(
-                    Icons.Default.Delete,
+                    Icons.Default.Close,
                     contentDescription = strings[K.stop],
                     tint = appColors.danger,
                 )

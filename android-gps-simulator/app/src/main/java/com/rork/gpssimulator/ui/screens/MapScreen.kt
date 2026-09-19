@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -53,6 +54,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -73,12 +75,37 @@ import com.rork.gpssimulator.ui.components.StatusDot
 import com.rork.gpssimulator.ui.map.MapMarker
 import com.rork.gpssimulator.ui.map.MapPolyline
 import com.rork.gpssimulator.ui.map.MapView
+import com.rork.gpssimulator.ui.map.MarkerStyle
 import com.rork.gpssimulator.ui.map.rememberMapCameraState
 import com.rork.gpssimulator.ui.theme.LocalAppColors
 import com.rork.gpssimulator.ui.theme.MonoValueStyle
 import com.rork.gpssimulator.util.Format
 import androidx.compose.runtime.collectAsState
 import kotlinx.coroutines.launch
+
+/**
+ * Constant clearance kept between the lowest floating control and the bottom
+ * navigation bar, so primary actions never visually merge with the tab bar.
+ */
+private val ControlSafeGap = 18.dp
+
+/**
+ * True when the user has disabled system animations, in which case the active
+ * marker renders without its pulse.
+ */
+@Composable
+private fun rememberReducedMotion(): Boolean {
+    val context = LocalContext.current
+    return remember(context) {
+        runCatching {
+            android.provider.Settings.Global.getFloat(
+                context.contentResolver,
+                android.provider.Settings.Global.ANIMATOR_DURATION_SCALE,
+                1f,
+            ) == 0f
+        }.getOrDefault(false)
+    }
+}
 
 @Composable
 fun MapScreen(
@@ -114,9 +141,19 @@ fun MapScreen(
 
     val isMockActive = mockState == MockState.MOCK_ACTIVE
 
-    // Pulse animation shared by the active marker.
+    // Pausing only means something while something is moving. For a fixed point
+    // there is nothing to freeze, so the control is hidden rather than faked.
+    val isMotionSession = sessionKind == SessionKind.ROUTE ||
+        sessionKind == SessionKind.JOYSTICK ||
+        settings.joystickEnabled
+
+    // Pulse animation for the active marker, skipped when the user has turned
+    // system animations off. The State is deliberately NOT read here with `by`:
+    // it is read inside the map's draw scope instead, so the animation
+    // invalidates drawing only and never recomposes this screen each frame.
+    val reducedMotion = rememberReducedMotion()
     val transition = rememberInfiniteTransition(label = "pulse")
-    val pulse by transition.animateFloat(
+    val pulse = transition.animateFloat(
         initialValue = 0f,
         targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(1600), RepeatMode.Restart),
@@ -149,16 +186,6 @@ fun MapScreen(
     }
 
     val markers = buildList {
-        activePoint?.let { point ->
-            add(
-                MapMarker(
-                    point = point,
-                    color = MaterialTheme.colorScheme.primary,
-                    pulsing = !isPaused,
-                    radiusMeters = settings.accuracyM.toDouble(),
-                ),
-            )
-        }
         if (!isMockActive) {
             realSample?.let { sample ->
                 add(
@@ -166,12 +193,34 @@ fun MapScreen(
                         point = sample.point,
                         color = appColors.success,
                         radiusMeters = sample.accuracy.toDouble(),
+                        style = MarkerStyle.REAL,
                     ),
                 )
             }
         }
-        // The pending candidate, in either state.
-        selected?.let { add(MapMarker(point = it.point, color = MaterialTheme.colorScheme.primary)) }
+        // The pending candidate, in either state. Drawn as an outline so it can
+        // never be mistaken for the live mocked position.
+        selected?.let {
+            add(
+                MapMarker(
+                    point = it.point,
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MarkerStyle.CANDIDATE,
+                ),
+            )
+        }
+        // The live mocked coordinate, added last so it owns the top of the stack.
+        activePoint?.let { point ->
+            add(
+                MapMarker(
+                    point = point,
+                    color = MaterialTheme.colorScheme.primary,
+                    pulsing = !isPaused && !reducedMotion,
+                    radiusMeters = settings.accuracyM.toDouble(),
+                    style = MarkerStyle.ACTIVE,
+                ),
+            )
+        }
     }
 
     val polylines = routeProgress?.let { progress ->
@@ -184,7 +233,7 @@ fun MapScreen(
             mapType = settings.mapType,
             markers = markers,
             polylines = polylines,
-            pulseFraction = pulse,
+            pulseFraction = { pulse.value },
             onCameraIdle = { center, zoom -> viewModel.persistCamera(center, zoom) },
             modifier = Modifier.fillMaxSize(),
         )
@@ -260,52 +309,53 @@ fun MapScreen(
             MapControlButton(Icons.Default.Star, strings[K.favorites], onOpenFavorites)
         }
 
-        // ---- Joystick ----
-        if (settings.joystickEnabled && mockState == MockState.MOCK_ACTIVE) {
-            JoystickControl(
-                speedLabel = Format.speed(currentSpeed, settings.units),
-                isPaused = isPaused,
-                onVector = { x, y -> viewModel.setJoystickVector(x, y) },
-                onTogglePause = { viewModel.togglePause() },
-                onClose = {
-                    viewModel.setJoystickVector(0f, 0f)
-                    viewModel.updateSettings { it.copy(joystickEnabled = false) }
-                },
-                modifier = Modifier
-                    .align(Alignment.BottomStart)
-                    // Clears the taller Select-This-Point + red X control stack.
-                    .padding(start = 14.dp, bottom = bottomInset + 200.dp),
-            )
-        }
-
-        // ---- Bottom action ----
-        Box(
+        // ---- Bottom controls ----
+        // Every floating bottom control lives in this single column, so they can
+        // never overlap each other or the navigation bar. The column clears the
+        // system navigation/gesture inset first, then the app's own bottom bar,
+        // then a constant safe gap — no device-specific offsets anywhere.
+        Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp)
-                .padding(bottom = bottomInset + 18.dp),
-            contentAlignment = Alignment.Center,
+                .navigationBarsPadding()
+                .padding(bottom = bottomInset + ControlSafeGap)
+                .padding(horizontal = 20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
         ) {
+            if (settings.joystickEnabled && isMockActive) {
+                JoystickControl(
+                    speedLabel = Format.speed(currentSpeed, settings.units),
+                    isPaused = isPaused,
+                    onVector = { x, y -> viewModel.setJoystickVector(x, y) },
+                    onTogglePause = { viewModel.togglePause() },
+                    onClose = {
+                        viewModel.setJoystickVector(0f, 0f)
+                        viewModel.updateSettings { it.copy(joystickEnabled = false) }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.Start)
+                        .padding(bottom = 16.dp),
+                )
+            }
+
             if (isMockActive) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    // Aim a new candidate without interrupting the running session.
-                    SelectPointButton(
-                        label = strings[K.select_this_point],
-                        lat = camera.centerLat,
-                        lng = camera.centerLng,
-                        onClick = { viewModel.selectPoint(camera.center) },
-                    )
-                    Spacer(Modifier.height(16.dp))
-                    ActiveControls(
-                        showPause = sessionKind != SessionKind.STATIC || settings.joystickEnabled,
-                        isPaused = isPaused,
-                        pauseLabel = if (isPaused) strings[K.resume] else strings[K.pause],
-                        stopLabel = strings[K.stop],
-                        onPause = { viewModel.togglePause() },
-                        onStop = { viewModel.stopMock() },
-                    )
-                }
+                // Aim a new candidate without interrupting the running session.
+                SelectPointButton(
+                    label = strings[K.select_this_point],
+                    lat = camera.centerLat,
+                    lng = camera.centerLng,
+                    onClick = { viewModel.selectPoint(camera.center) },
+                )
+                Spacer(Modifier.height(16.dp))
+                ActiveControls(
+                    showPause = isMotionSession,
+                    isPaused = isPaused,
+                    pauseLabel = if (isPaused) strings[K.resume] else strings[K.pause],
+                    stopLabel = strings[K.stop],
+                    onPause = { viewModel.togglePause() },
+                    onStop = { viewModel.stopMock() },
+                )
             } else {
                 Button(
                     onClick = { viewModel.selectPoint(camera.center) },

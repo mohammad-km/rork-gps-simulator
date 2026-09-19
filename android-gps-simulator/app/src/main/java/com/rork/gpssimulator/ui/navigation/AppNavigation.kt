@@ -94,8 +94,12 @@ private val Tabs = listOf(
     TabItem(Routes.SETTINGS, Icons.Default.Settings, K.tab_settings),
 )
 
-/** Height reserved for the bottom navigation bar, used to inset screen content. */
-private val BottomBarHeight = 80.dp
+/**
+ * Content height of the Material bottom navigation bar, excluding the system
+ * navigation inset the bar adds underneath itself. Callers add the measured
+ * inset so floating controls clear the bar on every navigation mode.
+ */
+private val BottomBarContentHeight = 80.dp
 
 @Composable
 fun AppNavigation() {
@@ -186,7 +190,11 @@ private fun AppScaffold(viewModel: AppViewModel) {
     ) { _ ->
         // The map is full-bleed, so screens handle their own insets instead of
         // consuming the scaffold padding.
-        val bottomInset = if (showBottomBar) BottomBarHeight else 0.dp
+        //
+        // This is the bar's *content* height only. Screens that use their own
+        // Scaffold already receive the system navigation inset through its content
+        // padding; the full-bleed map adds that inset itself.
+        val bottomInset = if (showBottomBar) BottomBarContentHeight else 0.dp
 
         NavHost(
             navController = navController,

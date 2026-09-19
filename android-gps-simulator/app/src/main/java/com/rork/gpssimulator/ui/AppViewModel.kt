@@ -408,12 +408,22 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         refreshPermissionState()
     }
 
+    /**
+     * Freezes or resumes dynamic movement (route playback / joystick) while the
+     * mock session itself stays fully alive: providers stay installed and the
+     * last mocked coordinate keeps being pushed. This is deliberately NOT a stop —
+     * only [stopMock] returns the device to real GPS.
+     */
     fun togglePause() {
         if (_mockState.value != MockState.MOCK_ACTIVE) return
         val paused = !_isPaused.value
         _isPaused.value = paused
         _routeProgress.value = _routeProgress.value?.copy(isPaused = paused)
-        if (paused) _currentSpeedKmh.value = 0.0
+        if (paused) {
+            _currentSpeedKmh.value = 0.0
+            // Hold position immediately rather than waiting for the next tick.
+            _activePoint.value?.let { push(it, 0.0, settings.value) }
+        }
     }
 
     private fun recordHistory() {
@@ -456,7 +466,15 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val config = settings.value
                 delay(config.updateIntervalMs.toLong().coerceIn(200L, 10_000L))
                 if (_mockState.value != MockState.MOCK_ACTIVE) break
-                if (_isPaused.value) continue
+
+                // Paused freezes movement but must NOT stop mocking: keep pushing
+                // the current coordinate so Android holds the mocked fix instead
+                // of falling back to the real GPS provider.
+                if (_isPaused.value) {
+                    val held = _activePoint.value ?: break
+                    if (!push(held, 0.0, config)) break
+                    continue
+                }
 
                 val base = _activePoint.value ?: break
                 val target = joystickVector?.let { (dirX, dirY) ->
@@ -487,7 +505,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
                 val stepMs = config.updateIntervalMs.toLong().coerceIn(200L, 5_000L)
                 delay(stepMs)
                 if (_mockState.value != MockState.MOCK_ACTIVE) break
-                if (_isPaused.value) continue
+
+                // Freeze at the current coordinate without surrendering the mock:
+                // `traveled` is not advanced, so Resume continues from here.
+                if (_isPaused.value) {
+                    val held = _activePoint.value ?: break
+                    if (!push(held, 0.0, config)) break
+                    continue
+                }
 
                 val speedKmh = route.speedKmh
                 val stepMeters = (speedKmh / 3.6) * (stepMs / 1000.0)

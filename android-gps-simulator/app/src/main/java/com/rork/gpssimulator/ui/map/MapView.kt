@@ -37,6 +37,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.dp
 import com.rork.gpssimulator.data.model.LatLng
 import com.rork.gpssimulator.data.model.MapType
 import kotlinx.coroutines.CoroutineScope
@@ -115,6 +116,21 @@ class MapCameraState(
 fun rememberMapCameraState(initialCenter: LatLng, initialZoom: Float): MapCameraState =
     remember { MapCameraState(initialCenter, initialZoom) }
 
+/**
+ * Visual role of a marker. The active mocked position and a pending candidate
+ * must never be confused with each other, so they render differently.
+ */
+enum class MarkerStyle {
+    /** The coordinate Android is currently being mocked to. Large and loud. */
+    ACTIVE,
+
+    /** A pending candidate the user has pinned but not confirmed. Quiet outline. */
+    CANDIDATE,
+
+    /** The device's real GPS fix. */
+    REAL,
+}
+
 /** A marker drawn on the map. */
 data class MapMarker(
     val point: LatLng,
@@ -122,6 +138,7 @@ data class MapMarker(
     val pulsing: Boolean = false,
     val radiusMeters: Double = 0.0,
     val label: String? = null,
+    val style: MarkerStyle = MarkerStyle.REAL,
 )
 
 /** A polyline drawn on the map. */
@@ -151,7 +168,12 @@ fun MapView(
     markers: List<MapMarker> = emptyList(),
     polylines: List<MapPolyline> = emptyList(),
     circles: List<MapCircle> = emptyList(),
-    pulseFraction: Float = 0f,
+    /**
+     * Supplies the 0..1 pulse phase. Read lazily inside the draw scope (and only
+     * when a pulsing marker exists) so the animation invalidates drawing without
+     * recomposing the map or its parent every frame.
+     */
+    pulseFraction: () -> Float = { 0f },
     onMapTap: ((LatLng) -> Unit)? = null,
     onCameraIdle: ((LatLng, Float) -> Unit)? = null,
     content: @Composable BoxScope.() -> Unit = {},
@@ -232,7 +254,14 @@ fun MapView(
             drawTiles(tileStore, source, projector)
             circles.forEach { drawMapCircle(it, projector) }
             polylines.forEach { drawPolyline(it, projector) }
-            markers.forEach { drawMarker(it, projector, pulseFraction) }
+
+            val phase = if (markers.any { it.pulsing }) pulseFraction() else 0f
+            // Draw order matters: the active mocked position always wins the
+            // z-order over candidates, real fix, routes and tiles.
+            markers.filter { it.style != MarkerStyle.ACTIVE }
+                .forEach { drawMarker(it, projector, phase) }
+            markers.filter { it.style == MarkerStyle.ACTIVE }
+                .forEach { drawMarker(it, projector, phase) }
         }
 
         content()
@@ -418,31 +447,103 @@ private fun DrawScope.drawMapCircle(circle: MapCircle, projector: MapProjector) 
 
 private fun DrawScope.drawMarker(marker: MapMarker, projector: MapProjector, pulseFraction: Float) {
     val center = projector.toScreen(marker.point)
-    if (center.x < -200 || center.x > size.width + 200) return
+    val margin = 320f
+    if (center.x < -margin || center.x > size.width + margin) return
+    if (center.y < -margin || center.y > size.height + margin) return
 
-    if (marker.radiusMeters > 0) {
-        val radiusPx = (marker.radiusMeters / projector.metersPerPixel()).toFloat()
-        if (radiusPx > 1f) {
-            drawCircle(marker.color.copy(alpha = 0.16f), radius = radiusPx, center = center)
-            drawCircle(
-                marker.color.copy(alpha = 0.34f),
-                radius = radiusPx,
-                center = center,
-                style = Stroke(width = 2.5f),
-            )
-        }
+    when (marker.style) {
+        MarkerStyle.ACTIVE -> drawActiveMarker(marker, projector, center, pulseFraction)
+        MarkerStyle.CANDIDATE -> drawCandidateMarker(marker, center)
+        MarkerStyle.REAL -> drawRealMarker(marker, projector, center)
     }
+}
 
-    if (marker.pulsing) {
-        val pulseRadius = 26f + 34f * pulseFraction
+/**
+ * The live mocked position: translucent accuracy halo, an optional pulse, a thick
+ * white ring for contrast on satellite/terrain tiles, a bold primary disc and a
+ * small white core that keeps the exact coordinate unambiguous.
+ */
+private fun DrawScope.drawActiveMarker(
+    marker: MapMarker,
+    projector: MapProjector,
+    center: Offset,
+    pulseFraction: Float,
+) {
+    val discRadius = 11.dp.toPx()
+    val ringRadius = 14.5.dp.toPx()
+
+    val accuracyPx = (marker.radiusMeters / projector.metersPerPixel()).toFloat()
+    val haloRadius = maxOf(accuracyPx, 30.dp.toPx())
+    drawCircle(marker.color.copy(alpha = 0.16f), radius = haloRadius, center = center)
+    drawCircle(
+        color = marker.color.copy(alpha = 0.34f),
+        radius = haloRadius,
+        center = center,
+        style = Stroke(width = 1.5.dp.toPx()),
+    )
+
+    if (marker.pulsing && pulseFraction > 0f) {
+        val pulseRadius = ringRadius + (haloRadius - ringRadius).coerceAtLeast(
+            18.dp.toPx(),
+        ) * pulseFraction
         drawCircle(
-            color = marker.color.copy(alpha = (1f - pulseFraction) * 0.42f),
+            color = marker.color.copy(alpha = (1f - pulseFraction) * 0.45f),
             radius = pulseRadius,
             center = center,
+            style = Stroke(width = 2.5.dp.toPx()),
         )
     }
 
-    drawCircle(Color.White, radius = 15f, center = center)
-    drawCircle(marker.color, radius = 11f, center = center)
-    drawCircle(Color.White, radius = 4.5f, center = center)
+    // Drop shadow lifts the marker off busy imagery.
+    drawCircle(
+        color = Color.Black.copy(alpha = 0.22f),
+        radius = ringRadius,
+        center = Offset(center.x, center.y + 1.5.dp.toPx()),
+    )
+    drawCircle(Color.White, radius = ringRadius, center = center)
+    drawCircle(marker.color, radius = discRadius, center = center)
+    drawCircle(Color.White.copy(alpha = 0.95f), radius = 3.dp.toPx(), center = center)
+}
+
+/**
+ * A pinned candidate. Deliberately an outline so it never reads as the live
+ * mocked position, which is the only marker allowed to look solid and blue.
+ */
+private fun DrawScope.drawCandidateMarker(marker: MapMarker, center: Offset) {
+    val radius = 8.dp.toPx()
+    drawCircle(
+        color = Color.White.copy(alpha = 0.92f),
+        radius = radius,
+        center = center,
+        style = Stroke(width = 4.dp.toPx()),
+    )
+    drawCircle(
+        color = marker.color,
+        radius = radius,
+        center = center,
+        style = Stroke(width = 2.dp.toPx()),
+    )
+    drawCircle(marker.color, radius = 2.dp.toPx(), center = center)
+}
+
+/** The real device fix: present but visually subordinate to the mocked position. */
+private fun DrawScope.drawRealMarker(
+    marker: MapMarker,
+    projector: MapProjector,
+    center: Offset,
+) {
+    if (marker.radiusMeters > 0) {
+        val radiusPx = (marker.radiusMeters / projector.metersPerPixel()).toFloat()
+        if (radiusPx > 1f) {
+            drawCircle(marker.color.copy(alpha = 0.14f), radius = radiusPx, center = center)
+            drawCircle(
+                color = marker.color.copy(alpha = 0.30f),
+                radius = radiusPx,
+                center = center,
+                style = Stroke(width = 1.5.dp.toPx()),
+            )
+        }
+    }
+    drawCircle(Color.White, radius = 8.dp.toPx(), center = center)
+    drawCircle(marker.color, radius = 6.dp.toPx(), center = center)
 }
