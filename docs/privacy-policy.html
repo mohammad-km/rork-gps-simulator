@@ -19,50 +19,79 @@
 <p>GPS Simulator ("the App") is a developer testing tool that lets a user
 supply a mock (simulated) location to Android's location system, for
 software testing and development purposes. This policy explains what
-data the App accesses and, more importantly, what it does not do.</p>
+data the App accesses, what it sends over the network, and what it
+never does.</p>
 
-<h2>Data Collection</h2>
-<p>The App does not collect, store, or transmit any personal data to the
-developer or to any third party. The App has no backend server and no
-analytics, advertising, or tracking SDKs of any kind.</p>
+<h2>No Account, No Server of Ours</h2>
+<p>The App has no user accounts, and the developer does not operate any
+backend server. The App does not collect, sell, or share personal data
+with the developer, and contains no analytics or advertising SDKs of
+any kind.</p>
 
 <h2>Location Access</h2>
 <p>The App requests foreground location permission (ACCESS_FINE_LOCATION /
-ACCESS_COARSE_LOCATION) solely to:</p>
-<ul>
-  <li>Show your real current position on the in-app map so you can pick a
-  starting point for a simulated session, and</li>
-  <li>Let you compare your real position against the simulated (mock)
-  position while testing.</li>
-</ul>
-<p>The App does not request or use background location access. Real
-location data is read only while the app is open and visible, is used
-only to render the map on your device, and is never saved, logged, or
-sent anywhere.</p>
+ACCESS_COARSE_LOCATION) to show your real current position on the in-app
+map, so you can pick a point to simulate or compare it against your
+simulated position. The App does not request background location
+permission, but the real-location listener may keep running while the
+app's process is alive and its screen is bound (for example while the
+app is open, even if temporarily not on screen), not only at the exact
+moment the screen is visible. It stops when the app's screen component
+is destroyed.</p>
+
+<h2>Map Tiles and Place Search (Third-Party Servers)</h2>
+<p>To display the map, the App downloads map tiles from third-party map
+providers depending on the map style you choose: OpenStreetMap, Esri
+World Imagery, OpenTopoMap, or OpenStreetMap France (Humanitarian
+tiles). Loading a map tile sends the visible map area and your IP
+address to that provider's servers, the same way any map app or web
+page with an embedded map would.</p>
+<p>If you use the in-app place search, or reverse-geocode a point you
+tap on the map, the App sends the text you typed or the coordinates you
+selected to the OpenStreetMap Nominatim geocoding service, in order to
+return a place name or address. This is only sent when you actively
+search or tap to look up a place — not continuously and not in the
+background.</p>
+<p>These providers are independent third parties with their own privacy
+practices; the App does not control what they log. No account
+identifiers, contact information, or other personal data beyond what
+this section describes is sent to them.</p>
 
 <h2>Mock Location Data</h2>
-<p>Coordinates you choose to simulate are used exclusively to feed
-Android's mock location provider (via Developer Options → "Select mock
-location app") on your own device. This data stays on your device and is
-used only to let other apps on your device see the simulated location
-while you test them. It is never uploaded or shared.</p>
+<p>Coordinates you choose to simulate are used to feed Android's mock
+location provider (via Developer Options → "Select mock location app")
+on your own device. This is used only to let other apps on your device
+see the simulated location while you test them. It is never uploaded or
+shared with the developer or any third party.</p>
 
-<h2>Local Storage</h2>
-<p>The App stores your in-app settings (such as map style, units, and the
-last simulated point) locally on your device only, so they persist
-between sessions. This data never leaves your device and is deleted when
-you uninstall the App or clear its data.</p>
+<h2>Local Storage on Your Device</h2>
+<p>The App stores the following locally on your device only — never
+transmitted to the developer:</p>
+<ul>
+  <li>App settings and preferences (map style, units, etc.)</li>
+  <li>If "Remember last position" is enabled (on by default), the last
+  map centre shown — which may be your real location if you last viewed
+  the map there</li>
+  <li>Your search history, favourites, and saved routes</li>
+</ul>
+<p>This data never leaves your device via any developer-operated
+service, and is deleted when you uninstall the App or clear its data.
+You can disable "Remember last position" in Settings if you do not want
+your last-viewed map position stored.</p>
 
 <h2>Permissions Summary</h2>
 <ul>
   <li><strong>Location (foreground only):</strong> to show your real
   position on the map, as described above.</li>
-  <li><strong>Notifications:</strong> to show the required "Mock location
-  active" foreground-service notification while a simulated session is
-  running, and to let you stop it from the notification.</li>
+  <li><strong>Internet:</strong> to download map tiles and, when you
+  search or tap a point, to perform place lookups, both described
+  above.</li>
+  <li><strong>Notifications / Foreground service:</strong> to show the
+  required "Mock location active" notification while a simulated
+  session is running, and to let you stop it from the notification.</li>
 </ul>
 <p>The App does not request background location, contacts, camera,
-microphone, SMS, storage, or any other sensitive permission.</p>
+microphone, SMS, or storage permissions.</p>
 
 <h2>Children's Privacy</h2>
 <p>The App is a developer tool and is not directed at children. It does
