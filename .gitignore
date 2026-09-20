@@ -5,5 +5,8 @@ node_modules
 
 # Android release signing: never commit keystores or their credentials
 key.properties
+keystore.properties
 *.jks
 *.keystore
+*.p12
+*.pfx
